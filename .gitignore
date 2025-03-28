@@ -1,0 +1,92 @@
+# GroupShare Project .gitignore
+# Pliki wrażliwe i poufne dane
+
+# Poufne dokumenty i dane
+docs/legal/nda-agreements/
+docs/legal/internal-risk-assessments/
+**/*confidential*
+**/*secret*
+**/*private*
+
+# Konfiguracje zawierające dane dostępowe
+*.env
+.env.local
+.env.*
+*.pem
+*.key
+**/credentials.json
+**/auth.json
+**/secrets.json
+**/config.local.json
+
+# Klucze API i dane dostępowe
+**/apikey*
+**/access-token*
+**/client-secrets*
+
+# Logi i pliki tymczasowe
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.tmp
+*.temp
+*.swp
+*~
+
+# Katalogi zależności
+node_modules/
+jspm_packages/
+bower_components/
+
+# Katalogi dystrybucyjne
+dist/
+build/
+out/
+
+# Katalogi cache
+.npm
+.eslintcache
+.cache
+.parcel-cache
+
+# Systemy kontroli wersji (oprócz .git)
+.svn/
+CVS/
+
+# Pliki IDE i edytorów
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.project
+.classpath
+.settings/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Pliki wygenerowane przez system
+.DS_Store
+Thumbs.db
+desktop.ini
+._*
+
+# Specyficzne dla projektu GroupShare
+# Możesz dodać tutaj pliki specyficzne dla projektu
+groupshare-secrets/
+subscription-credentials/
+user-data/
+
+# Pliki baz danych
+*.sqlite
+*.db
+*.sql
+
+# Pliki backupów
+*.bak
+*.backup
