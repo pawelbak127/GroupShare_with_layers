@@ -109,4 +109,4 @@ Ten projekt jest prywatny i nie jest dostępny na licencji open source.
 
 ## 📞 Kontakt
 
-W przypadku pytań dotyczących projektu, skontaktuj się z zespołem: team@groupshare.app
+W przypadku pytań dotyczących projektu, skontaktuj się z zespołem: JAKIŚ ADRES
