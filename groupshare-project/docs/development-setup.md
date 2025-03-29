@@ -19,8 +19,8 @@ Przed rozpoczęciem pracy potrzebujesz zainstalować:
 
 ```bash
 # Klonowanie repozytorium
-git clone https://github.com/username/groupshare-project.git
-cd groupshare-project
+git clone https://github.com/pawelbak127/GroupShare.git
+cd GroupShare
 ```
 
 ## Instalacja zależności
