@@ -1,7 +1,8 @@
 // src/app/api/offers/route.js
 import { NextResponse } from 'next/server';
-import { getSubscriptionOffers } from '@/lib/supabase';
+import { getSubscriptionOffers } from '../../../lib/supabase-client.js';
 import { currentUser } from '@clerk/nextjs';
+
 
 /**
  * GET /api/offers

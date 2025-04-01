@@ -82,10 +82,10 @@ groupshare-secrets/
 subscription-credentials/
 user-data/
 
-# Pliki baz danych
-*.sqlite
-*.db
-*.sql
+# Pliki baz danych (Aktualnie zezwalam na dodawanie plików baz danych do repozytorium)
+#*.sqlite
+#*.db
+#*.sql
 
 # Pliki backupów
 *.bak
