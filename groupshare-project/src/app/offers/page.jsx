@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import OffersList from '@/components/offers/OffersList';
-import LoadingSpinner from '@/components/common/LoadingSpinner';
+import OffersList from '../../components/offers/OffersList';
+import LoadingSpinner from '../../components/common/LoadingSpinner';
 
 export default function OffersPage() {
   const [isLoading, setIsLoading] = useState(true);

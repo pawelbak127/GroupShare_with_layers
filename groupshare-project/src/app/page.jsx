@@ -1,9 +1,11 @@
 import Link from 'next/link';
 import Image from 'next/image';
-import { auth } from '@clerk/nextjs';
+import { currentUser } from '@clerk/nextjs/server';
 
 export default async function Home() {
-  const { userId } = await auth();
+  // Używamy currentUser zamiast auth()
+  const user = await currentUser();
+  const userId = user?.id;
   
   return (
     <div>

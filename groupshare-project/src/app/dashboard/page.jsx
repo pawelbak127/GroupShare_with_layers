@@ -2,11 +2,13 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { useUserProfile } from '@/lib/auth-hooks';
+// Zaktualizowany import - używamy tylko useUser z Clerk
+import { useUser } from '@clerk/nextjs';
 import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 export default function Dashboard() {
-  const { profile, isLoading } = useUserProfile();
+  // Użyj useUser zamiast useUserProfile
+  const { user, isLoaded } = useUser();
   const [applications, setApplications] = useState([]);
   const [pendingApplications, setPendingApplications] = useState([]);
   const [groups, setGroups] = useState([]);
@@ -15,7 +17,7 @@ export default function Dashboard() {
 
   // Pobierz dane po załadowaniu profilu
   useEffect(() => {
-    if (isLoading || !profile) return;
+    if (!isLoaded || !user) return;
 
     const fetchDashboardData = async () => {
       setIsLoadingData(true);
@@ -23,6 +25,7 @@ export default function Dashboard() {
 
       try {
         // Pobierz aplikacje użytkownika
+        // Uwaga: te endpointy jeszcze nie istnieją, ale kod czeka na ich stworzenie
         const applicationsRes = await fetch('/api/applications?active=true');
         if (!applicationsRes.ok) throw new Error('Failed to fetch applications');
         const applicationsData = await applicationsRes.json();
@@ -49,10 +52,15 @@ export default function Dashboard() {
     };
 
     fetchDashboardData();
-  }, [profile, isLoading]);
+  }, [user, isLoaded]);
 
   // Wyświetl stan ładowania
-  if (isLoading || isLoadingData) {
+  if (!isLoaded || isLoadingData) {
+    return <LoadingSpinner />;
+  }
+
+  // Jeśli użytkownik nie jest zalogowany, przekierowanie obsłuży middleware
+  if (!user) {
     return <LoadingSpinner />;
   }
 
@@ -61,7 +69,7 @@ export default function Dashboard() {
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
         <p className="text-gray-600 mt-1">
-          Witaj, {profile?.display_name || 'użytkowniku'}! Oto aktualne informacje o Twoich subskrypcjach.
+          Witaj, {user?.fullName || user?.username || 'użytkowniku'}! Oto aktualne informacje o Twoich subskrypcjach.
         </p>
       </div>
 

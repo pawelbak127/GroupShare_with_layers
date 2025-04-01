@@ -1,5 +1,5 @@
 // src/lib/auth-hooks.js
-import { useAuth } from '@clerk/nextjs';
+import { useUser } from '@clerk/nextjs';
 import { useEffect, useState } from 'react';
 import { getUserByAuthId, createUserProfile } from './supabase';
 
@@ -8,14 +8,14 @@ import { getUserByAuthId, createUserProfile } from './supabase';
  * @returns {Object} User profile data and loading status
  */
 export function useUserProfile() {
-  const { userId, isLoaded: isAuthLoaded, isSignedIn } = useAuth();
+  const { user, isLoaded: isAuthLoaded, isSignedIn } = useUser();
   const [profile, setProfile] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     // Skip if auth isn't loaded yet or user is not signed in
-    if (!isAuthLoaded || !isSignedIn) {
+    if (!isAuthLoaded || !isSignedIn || !user) {
       setIsLoading(false);
       return;
     }
@@ -26,6 +26,7 @@ export function useUserProfile() {
         setError(null);
 
         // Try to get existing user profile
+        const userId = user.id;
         const userProfile = await getUserByAuthId(userId);
 
         if (userProfile) {
@@ -33,11 +34,10 @@ export function useUserProfile() {
           setProfile(userProfile);
         } else {
           // User doesn't exist, we need to create a profile
-          // In production, you would get more data from Clerk
           const newUserProfile = {
             external_auth_id: userId,
-            display_name: 'New User', // You would get this from Clerk
-            email: 'user@example.com', // You would get this from Clerk
+            display_name: user.fullName || user.username || 'Nowy użytkownik',
+            email: user.primaryEmailAddress?.emailAddress || '',
             profile_type: 'both', // Default value
             verification_level: 'basic', // Default value
           };
@@ -54,7 +54,7 @@ export function useUserProfile() {
     }
 
     syncUserProfile();
-  }, [userId, isAuthLoaded, isSignedIn]);
+  }, [user, isAuthLoaded, isSignedIn]);
 
   return {
     profile,

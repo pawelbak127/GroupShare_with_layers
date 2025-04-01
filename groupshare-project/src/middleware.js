@@ -1,12 +1,44 @@
+import { clerkMiddleware, getAuth } from "@clerk/nextjs/server";
 import { NextResponse } from 'next/server';
-import { clerkMiddleware, getAuth } from '@clerk/nextjs/server';
 
-// Owijamy naszą funkcję middleware funkcją clerkMiddleware
-export default clerkMiddleware((req) => {
-  const { pathname } = req.nextUrl;
+// Konfiguracja middleware zabezpieczającego strony wymagające logowania
+export default clerkMiddleware(req => {
   const { userId } = getAuth(req);
+  const { pathname } = req.nextUrl;
   
-  // Generowanie unikalnego nonce dla CSP
+  // Lista ścieżek publicznych, które nie wymagają logowania
+  const publicPaths = [
+    '/',
+    '/sign-in',
+    '/sign-up',
+    '/offers',
+    '/how-it-works',
+    '/about',
+    '/api/webhook'
+  ];
+  
+  // Sprawdź, czy ścieżka jest publiczna
+  const isPublicPath = publicPaths.some(path => 
+    pathname === path || 
+    pathname.startsWith(`${path}/`) ||
+    // Obsługa dynamicznych ścieżek dla ofert
+    (path === '/offers' && pathname.match(/^\/offers\/[^\/]+$/))
+  );
+  
+  // Ścieżki chronione - wymagają logowania
+  const isAuthPath = 
+    pathname.startsWith('/dashboard') ||
+    pathname.startsWith('/groups') ||
+    pathname.startsWith('/applications');
+  
+  // Przekierowanie na stronę logowania dla chronionych ścieżek
+  if (!userId && isAuthPath) {
+    const signInUrl = new URL('/sign-in', req.url);
+    signInUrl.searchParams.set('redirect_url', pathname);
+    return NextResponse.redirect(signInUrl);
+  }
+  
+  // Generowanie nonce dla CSP
   const generateNonce = () => {
     const buffer = new Uint8Array(16);
     crypto.getRandomValues(buffer);
@@ -15,18 +47,17 @@ export default clerkMiddleware((req) => {
       .join('');
   };
   
-  // Nonce dla CSP
   const nonce = generateNonce();
   
   // Konfiguracja Content Security Policy
   const cspHeader = `
     default-src 'self';
-    script-src 'self' 'nonce-${nonce}' https://js.clerk.io https://js.stripe.com https://cdn.paddle.com;
+    script-src 'self' 'nonce-${nonce}' https://js.clerk.io https://js.stripe.com;
     style-src 'self' 'nonce-${nonce}' 'unsafe-inline' https://fonts.googleapis.com;
     img-src 'self' data: https://secure.gravatar.com https://img.clerk.com;
     font-src 'self' https://fonts.gstatic.com;
     connect-src 'self' https://api.clerk.io https://*.supabase.co https://api.stripe.com;
-    frame-src 'self' https://js.stripe.com https://checkout.paddle.com;
+    frame-src 'self' https://js.stripe.com;
     object-src 'none';
     base-uri 'self';
     form-action 'self';
@@ -39,34 +70,12 @@ export default clerkMiddleware((req) => {
   response.headers.set('Content-Security-Policy', cspHeader);
   response.headers.set('X-Nonce', nonce);
   
-  // Kontrola dostępu do chronionych ścieżek
-  if (
-    pathname.startsWith('/dashboard') ||
-    pathname.startsWith('/groups') ||
-    pathname.startsWith('/applications')
-  ) {
-    if (!userId) {
-      // Przekierowanie na stronę logowania dla chronionych ścieżek
-      const url = new URL('/sign-in', req.url);
-      url.searchParams.set('redirect_url', pathname);
-      return NextResponse.redirect(url);
-    }
-  }
-  
   return response;
 });
 
-// Konfiguracja, które ścieżki powinny uruchamiać middleware
+// Konfiguracja, które ścieżki powinny być ignorowane przez middleware Clerk
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except for:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public (public files)
-     * - api routes that handle their own authentication
-     */
-    '/((?!_next/static|_next/image|favicon.ico|public|api/auth).*)',
+    "/((?!_next/static|_next/image|favicon.ico|public|images).*)",
   ],
 };
