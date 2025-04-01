@@ -1,10 +1,8 @@
 import { NextResponse } from 'next/server';
-import { getAuth } from '@clerk/nextjs/server';
+import { clerkMiddleware, getAuth } from '@clerk/nextjs/server';
 
-/**
- * Middleware Next.js dla bezpieczeństwa i autoryzacji
- */
-export default function middleware(req) {
+// Owijamy naszą funkcję middleware funkcją clerkMiddleware
+export default clerkMiddleware((req) => {
   const { pathname } = req.nextUrl;
   const { userId } = getAuth(req);
   
@@ -56,7 +54,7 @@ export default function middleware(req) {
   }
   
   return response;
-}
+});
 
 // Konfiguracja, które ścieżki powinny uruchamiać middleware
 export const config = {

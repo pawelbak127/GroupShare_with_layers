@@ -51,8 +51,7 @@ const nextConfig = {
     // Konfiguracja kompilacji i minifikacji
     swcMinify: true,
     experimental: {
-      // Kompresja
-      compression: true,
+
       // Izolacja modułów
       esmExternals: true,
     },

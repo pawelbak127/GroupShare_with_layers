@@ -2,9 +2,8 @@
 import { Inter } from 'next/font/google';
 import { ClerkProvider } from '@clerk/nextjs';
 import { Toaster } from 'react-hot-toast';
-import Header from '@/components/layout/Header';
-import Footer from '@/components/layout/Footer';
-import './globals.css';
+import Header from '../components/layout/Header';
+import Footer from '../components/layout/Footer';
 
 // Load Inter font
 const inter = Inter({
