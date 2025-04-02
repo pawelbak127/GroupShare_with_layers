@@ -13,11 +13,39 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- DROP TABLE IF EXISTS transactions;
 -- DROP TABLE IF EXISTS applications;
 -- DROP TABLE IF EXISTS access_instructions;
+-- DROP TABLE IF EXISTS encryption_keys;
 -- DROP TABLE IF EXISTS group_subs;
 -- DROP TABLE IF EXISTS group_members;
 -- DROP TABLE IF EXISTS groups;
 -- DROP TABLE IF EXISTS user_profiles;
 -- DROP TABLE IF EXISTS subscription_platforms;
+-- DROP TABLE IF EXISTS security_logs;
+-- DROP TABLE IF EXISTS device_fingerprints;
+
+-- Create security_logs table for audit trail
+CREATE TABLE security_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID,
+    action_type TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    resource_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    ip_address TEXT,
+    user_agent TEXT,
+    details JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create device_fingerprints table for device tracking
+CREATE TABLE device_fingerprints (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL,
+    fingerprint TEXT NOT NULL,
+    first_seen_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    last_seen_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    counter INTEGER DEFAULT 1,
+    UNIQUE(user_id, fingerprint)
+);
 
 -- Create users profiles table
 CREATE TABLE user_profiles (
@@ -62,6 +90,19 @@ CREATE TABLE group_members (
     UNIQUE (group_id, user_id)
 );
 
+-- Create encryption_keys table for key management
+CREATE TABLE encryption_keys (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    key_type TEXT NOT NULL,
+    public_key TEXT NOT NULL,
+    private_key_enc TEXT NOT NULL,
+    related_id TEXT,
+    active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    rotated_at TIMESTAMP WITH TIME ZONE,
+    expires_at TIMESTAMP WITH TIME ZONE
+);
+
 -- Create subscription platforms table
 CREATE TABLE subscription_platforms (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -96,9 +137,11 @@ CREATE TABLE group_subs (
 CREATE TABLE access_instructions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     group_sub_id UUID NOT NULL REFERENCES group_subs(id) ON DELETE CASCADE,
-    encrypted_data BYTEA NOT NULL,
+    encrypted_data TEXT NOT NULL,
+    data_key_enc TEXT NOT NULL,
+    encryption_key_id UUID NOT NULL REFERENCES encryption_keys(id),
+    iv TEXT NOT NULL,
     encryption_version TEXT NOT NULL,
-    encryption_key_id TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -109,7 +152,7 @@ CREATE TABLE applications (
     user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
     group_sub_id UUID NOT NULL REFERENCES group_subs(id) ON DELETE CASCADE,
     message TEXT,
-    status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected', 'completed')),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected', 'completed', 'problem', 'cancelled')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     access_provided BOOLEAN DEFAULT FALSE,
@@ -122,7 +165,7 @@ CREATE TABLE applications (
 CREATE TABLE access_tokens (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     application_id UUID NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-    token TEXT NOT NULL UNIQUE,
+    token_hash TEXT NOT NULL UNIQUE,
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     used BOOLEAN DEFAULT FALSE,
     used_at TIMESTAMP WITH TIME ZONE,
@@ -179,6 +222,7 @@ CREATE INDEX idx_applications_user_id ON applications(user_id);
 CREATE INDEX idx_applications_group_sub_id ON applications(group_sub_id);
 CREATE INDEX idx_applications_status ON applications(status);
 CREATE INDEX idx_access_tokens_application_id ON access_tokens(application_id);
+CREATE INDEX idx_access_tokens_token_hash ON access_tokens(token_hash);
 CREATE INDEX idx_transactions_buyer_id ON transactions(buyer_id);
 CREATE INDEX idx_transactions_seller_id ON transactions(seller_id);
 CREATE INDEX idx_transactions_application_id ON transactions(application_id);
@@ -186,6 +230,13 @@ CREATE INDEX idx_transactions_status ON transactions(status);
 CREATE INDEX idx_ratings_rater_id ON ratings(rater_id);
 CREATE INDEX idx_ratings_rated_id ON ratings(rated_id);
 CREATE INDEX idx_ratings_transaction_id ON ratings(transaction_id);
+CREATE INDEX idx_encryption_keys_active ON encryption_keys(active);
+CREATE INDEX idx_encryption_keys_related_id ON encryption_keys(related_id);
+CREATE INDEX idx_security_logs_user_id ON security_logs(user_id);
+CREATE INDEX idx_security_logs_action_type ON security_logs(action_type);
+CREATE INDEX idx_security_logs_resource_type_id ON security_logs(resource_type, resource_id);
+CREATE INDEX idx_device_fingerprints_user_id ON device_fingerprints(user_id);
+CREATE INDEX idx_device_fingerprints_fingerprint ON device_fingerprints(fingerprint);
 
 -- Compound indexes for common query patterns
 CREATE INDEX idx_group_members_group_user ON group_members(group_id, user_id);
@@ -193,6 +244,7 @@ CREATE INDEX idx_applications_user_status ON applications(user_id, status);
 CREATE INDEX idx_applications_group_sub_status ON applications(group_sub_id, status);
 CREATE INDEX idx_transactions_buyer_status ON transactions(buyer_id, status);
 CREATE INDEX idx_transactions_seller_status ON transactions(seller_id, status);
+CREATE INDEX idx_security_logs_user_action ON security_logs(user_id, action_type);
 
 -- Updated at triggers
 CREATE OR REPLACE FUNCTION update_updated_at_column()

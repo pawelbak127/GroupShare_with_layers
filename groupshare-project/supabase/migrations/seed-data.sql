@@ -1,8 +1,25 @@
 -- Seed data for GroupShare
 -- This script inserts initial data for development and testing
 
--- Set app.encryption_key for development (in production, this would be set in environment)
-SELECT set_config('app.encryption_key', 'dev_encryption_key_for_testing_only', false);
+-- Generate encryption keys for development (in production, this would be handled securely)
+-- DO NOT hardcode encryption keys in production
+DO $$
+DECLARE
+    master_key_id UUID;
+BEGIN
+    -- Insert a master encryption key
+    INSERT INTO encryption_keys (
+        key_type,
+        public_key,
+        private_key_enc,
+        active
+    ) VALUES (
+        'master',
+        'dummy_public_key_for_development', -- In production, these would be proper RSA/ECC keys
+        'dummy_encrypted_private_key_for_development',
+        true
+    ) RETURNING id INTO master_key_id;
+END $$;
 
 -- Insert subscription platforms
 INSERT INTO subscription_platforms (id, name, description, icon, max_members, requirements_text, requirements_icon, pricing, active) VALUES
@@ -249,6 +266,62 @@ INSERT INTO group_members (group_id, user_id, role, status, invited_by, joined_a
   NOW() - INTERVAL '20 days'
 );
 
+-- Create encryption keys for group subscriptions
+DO $$
+DECLARE
+    key_id1 UUID;
+    key_id2 UUID;
+    key_id3 UUID;
+BEGIN
+    -- Generate encryption keys for each group subscription that needs it
+    -- In production, these would be secure RSA or ECC keys
+    
+    -- Key for Microsoft 365 subscription
+    INSERT INTO encryption_keys (
+        key_type,
+        public_key,
+        private_key_enc,
+        related_id,
+        active
+    ) VALUES (
+        'group',
+        'dummy_public_key_1', -- In production, this would be a real public key
+        'dummy_encrypted_private_key_1', -- In production, this would be encrypted with a master key
+        'sub11111-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        true
+    ) RETURNING id INTO key_id1;
+    
+    -- Key for Apple One subscription
+    INSERT INTO encryption_keys (
+        key_type,
+        public_key,
+        private_key_enc,
+        related_id,
+        active
+    ) VALUES (
+        'group',
+        'dummy_public_key_2',
+        'dummy_encrypted_private_key_2',
+        'sub33333-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        true
+    ) RETURNING id INTO key_id2;
+    
+    -- Key for NordVPN subscription
+    INSERT INTO encryption_keys (
+        key_type,
+        public_key,
+        private_key_enc,
+        related_id,
+        active
+    ) VALUES (
+        'group',
+        'dummy_public_key_3',
+        'dummy_encrypted_private_key_3',
+        'sub55555-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        true
+    ) RETURNING id INTO key_id3;
+END $$;
+
 -- Create subscription offers
 INSERT INTO group_subs (id, group_id, platform_id, status, slots_total, slots_available, price_per_slot, currency, instant_access) VALUES
 (
@@ -308,22 +381,37 @@ INSERT INTO group_subs (id, group_id, platform_id, status, slots_total, slots_av
 );
 
 -- Add access instructions for offers with instant_access
-SELECT store_access_instructions(
-  'sub11111-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-  '{"type": "microsoft365", "inviteLink": "https://example.com/invite/microsoft365", "additionalInstructions": "Po kliknięciu w link, zaloguj się na swoje konto Microsoft. Będziesz mieć natychmiastowy dostęp do wszystkich aplikacji Office oraz 1TB OneDrive.", "contactEmail": "michal.k@example.com"}',
-  'main-key'
-);
-
-SELECT store_access_instructions(
-  'sub33333-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-  '{"type": "appleone", "inviteLink": "https://example.com/invite/appleone", "additionalInstructions": "Po kliknięciu w link, zaakceptuj zaproszenie do Family Sharing. Będziesz mieć natychmiastowy dostęp do Apple Music, Apple TV+, Apple Arcade i iCloud+.", "contactEmail": "piotr.w@example.com"}',
-  'main-key'
-);
-
-SELECT store_access_instructions(
-  'sub55555-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-  '{"type": "nordvpn", "username": "team_user_4", "password": "shared_password_example", "additionalInstructions": "Zaloguj się za pomocą podanych danych. Nie zmieniaj hasła. Maksymalnie 2 równoczesne połączenia na osobę.", "contactEmail": "magda.l@example.com"}',
-  'main-key'
+INSERT INTO access_instructions (
+    group_sub_id, 
+    encrypted_data, 
+    data_key_enc, 
+    encryption_key_id, 
+    iv, 
+    encryption_version
+) VALUES 
+(
+    'sub11111-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    'dummy_encrypted_data_for_microsoft365', -- In production, this would be real encrypted data
+    'dummy_encrypted_key', 
+    (SELECT id FROM encryption_keys WHERE related_id = 'sub11111-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
+    'dummy_iv',
+    '1.0'
+),
+(
+    'sub33333-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    'dummy_encrypted_data_for_appleone',
+    'dummy_encrypted_key',
+    (SELECT id FROM encryption_keys WHERE related_id = 'sub33333-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
+    'dummy_iv',
+    '1.0'
+),
+(
+    'sub55555-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    'dummy_encrypted_data_for_nordvpn',
+    'dummy_encrypted_key',
+    (SELECT id FROM encryption_keys WHERE related_id = 'sub55555-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
+    'dummy_iv',
+    '1.0'
 );
 
 -- Create some sample applications

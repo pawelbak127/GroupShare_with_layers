@@ -1,11 +1,10 @@
-// src/app/api/offers/[id]/apply/route.js
 import { NextResponse } from 'next/server';
-import { getSubscriptionOffer, createApplication } from '@/lib/supabase';
 import { currentUser } from '@clerk/nextjs';
+import supabase from '@/lib/supabase-client';
 
 /**
  * POST /api/offers/[id]/apply
- * Apply for a subscription offer
+ * Aplikuj o dostęp do oferty subskrypcji
  */
 export async function POST(request, { params }) {
   try {
@@ -18,7 +17,7 @@ export async function POST(request, { params }) {
       );
     }
 
-    // Verify user is authenticated
+    // Sprawdź autentykację
     const user = await currentUser();
     if (!user) {
       return NextResponse.json(
@@ -27,21 +26,56 @@ export async function POST(request, { params }) {
       );
     }
 
-    // Parse request body
+    // Pobierz profil użytkownika z Supabase
+    const { data: userProfile, error: profileError } = await supabase
+      .from('user_profiles')
+      .select('id')
+      .eq('external_auth_id', user.id)
+      .single();
+
+    if (profileError || !userProfile) {
+      // Jeśli profil nie istnieje, pobierz dane z API profilu, które go utworzy
+      const profileResponse = await fetch(
+        `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/profile`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_KEY}`
+          }
+        }
+      );
+
+      if (!profileResponse.ok) {
+        return NextResponse.json(
+          { error: 'Failed to get or create user profile' },
+          { status: 500 }
+        );
+      }
+
+      const userProfileData = await profileResponse.json();
+      userProfile = { id: userProfileData.id };
+    }
+
+    // Parsuj dane żądania
     const body = await request.json();
     const message = body.message || '';
 
-    // Get the subscription offer
-    const offer = await getSubscriptionOffer(id);
+    // Pobierz informacje o ofercie subskrypcji
+    const { data: offer, error: offerError } = await supabase
+      .from('group_subs')
+      .select('*')
+      .eq('id', id)
+      .single();
 
-    if (!offer) {
+    if (offerError) {
       return NextResponse.json(
         { error: 'Subscription offer not found' },
         { status: 404 }
       );
     }
 
-    // Check if offer is still active and has available slots
+    // Sprawdź, czy oferta jest aktywna i ma dostępne miejsca
     if (offer.status !== 'active') {
       return NextResponse.json(
         { error: 'This subscription offer is no longer active' },
@@ -56,63 +90,54 @@ export async function POST(request, { params }) {
       );
     }
 
-    // Get user profile ID from Supabase
-    const userProfileResponse = await fetch(
-      `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/profile`,
-      {
-        headers: {
-          'Authorization': `Bearer ${await user.getToken()}`
-        }
-      }
-    );
+    // Sprawdź, czy użytkownik już ma aktywną aplikację dla tej oferty
+    const { data: existingApplications, error: existingAppError } = await supabase
+      .from('applications')
+      .select('id, status')
+      .eq('user_id', userProfile.id)
+      .eq('group_sub_id', id)
+      .not('status', 'in', '("rejected","cancelled")');
 
-    const userProfile = await userProfileResponse.json();
-    if (!userProfile || !userProfile.id) {
-      return NextResponse.json(
-        { error: 'User profile not found' },
-        { status: 404 }
-      );
-    }
-
-    // Check if user already has an active application for this offer
-    const existingApplicationResponse = await fetch(
-      `${process.env.NEXT_PUBLIC_APP_URL}/api/applications?userId=${userProfile.id}&groupSubId=${id}&active=true`,
-      {
-        headers: {
-          'Authorization': `Bearer ${await user.getToken()}`
-        }
-      }
-    );
-
-    const existingApplications = await existingApplicationResponse.json();
-    if (existingApplications && existingApplications.length > 0) {
+    if (!existingAppError && existingApplications && existingApplications.length > 0) {
       return NextResponse.json(
         { error: 'You already have an active application for this offer' },
         { status: 400 }
       );
     }
 
-    // Create application in Supabase
-    const applicationData = {
-      user_id: userProfile.id,
-      group_sub_id: id,
-      message,
-      status: 'pending'
-    };
+    // Utwórz nową aplikację
+    const { data: application, error: createError } = await supabase
+      .from('applications')
+      .insert({
+        user_id: userProfile.id,
+        group_sub_id: id,
+        message,
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .select()
+      .single();
 
-    const application = await createApplication(applicationData);
-
-    if (!application) {
+    if (createError) {
+      console.error('Error creating application:', createError);
       return NextResponse.json(
         { error: 'Failed to create application' },
         { status: 500 }
       );
     }
 
-    // Send notification to the offer owner
-    // This would be implemented separately with a notification system
-    // For now, just log it
-    console.log(`New application from ${userProfile.id} for offer ${id}`);
+    // Log event for auditing
+    await supabase
+      .from('security_logs')
+      .insert({
+        user_id: userProfile.id,
+        action_type: 'application_created',
+        resource_type: 'group_sub',
+        resource_id: id,
+        status: 'success',
+        details: { application_id: application.id }
+      });
 
     return NextResponse.json(
       { 

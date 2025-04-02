@@ -12,6 +12,9 @@ ALTER TABLE applications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE access_tokens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ratings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE encryption_keys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE security_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE device_fingerprints ENABLE ROW LEVEL SECURITY;
 
 -- Create a function to get the current authenticated user ID
 CREATE OR REPLACE FUNCTION auth.user_id() RETURNS UUID AS $$
@@ -286,3 +289,31 @@ CREATE POLICY "Users can delete own ratings" ON ratings
   FOR DELETE USING (
     rater_id = auth.user_id()
   );
+
+----------------------
+-- Policy: encryption_keys
+----------------------
+-- Only service role can access encryption keys
+CREATE POLICY "Service can manage encryption keys" ON encryption_keys
+  FOR ALL USING (auth.role() = 'service_role');
+
+----------------------
+-- Policy: security_logs
+----------------------
+-- Users can see their own security logs
+CREATE POLICY "Users can view own security logs" ON security_logs
+  FOR SELECT USING (user_id = auth.user_id());
+
+-- Only service role can insert security logs
+CREATE POLICY "Service can insert security logs" ON security_logs
+  FOR INSERT WITH CHECK (auth.role() = 'service_role');
+
+-- No one can update or delete security logs (immutable audit trail)
+-- These policies are intentionally omitted
+
+----------------------
+-- Policy: device_fingerprints
+----------------------
+-- Only service role can access device fingerprints
+CREATE POLICY "Service can manage device fingerprints" ON device_fingerprints
+  FOR ALL USING (auth.role() = 'service_role');

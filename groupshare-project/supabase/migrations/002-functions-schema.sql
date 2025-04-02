@@ -43,29 +43,46 @@ FOR EACH ROW
 EXECUTE FUNCTION calculate_user_rating();
 
 -- Function to update slots_available when application status changes
+-- Fixed to avoid recursion issues
 CREATE OR REPLACE FUNCTION update_slots_available()
 RETURNS TRIGGER AS $$
+DECLARE
+  current_slots INTEGER;
 BEGIN
+  -- Skip if we're in a recursive call or if status didn't change
+  IF TG_LEVEL = 'STATEMENT' OR (OLD.status = NEW.status) THEN
+    RETURN NEW;
+  END IF;
+
+  -- Get current slots available
+  SELECT slots_available INTO current_slots
+  FROM group_subs
+  WHERE id = NEW.group_sub_id;
+
   -- If application is accepted, decrease available slots
   IF NEW.status = 'accepted' AND (OLD.status IS NULL OR OLD.status <> 'accepted') THEN
     UPDATE group_subs
-    SET slots_available = slots_available - 1
+    SET 
+      slots_available = GREATEST(0, current_slots - 1),
+      -- Update status in the same query to avoid triggering again
+      status = CASE 
+        WHEN GREATEST(0, current_slots - 1) <= 0 THEN 'full'
+        ELSE status
+      END
     WHERE id = NEW.group_sub_id;
   
   -- If application was accepted and now it's not, increase available slots
   ELSIF OLD.status = 'accepted' AND NEW.status <> 'accepted' THEN
     UPDATE group_subs
-    SET slots_available = slots_available + 1
+    SET 
+      slots_available = current_slots + 1,
+      -- Update status in the same query
+      status = CASE 
+        WHEN current_slots <= 0 AND (current_slots + 1) > 0 THEN 'active'
+        ELSE status
+      END
     WHERE id = NEW.group_sub_id;
   END IF;
-  
-  -- Update group_sub status to 'full' if no slots available
-  UPDATE group_subs
-  SET status = CASE 
-    WHEN slots_available <= 0 THEN 'full'
-    ELSE status
-  END
-  WHERE id = NEW.group_sub_id;
   
   RETURN NEW;
 END;
@@ -128,24 +145,37 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Function to hash a token
+CREATE OR REPLACE FUNCTION hash_token(token TEXT)
+RETURNS TEXT AS $$
+BEGIN
+  RETURN encode(digest(token, 'sha256'), 'hex');
+END;
+$$ LANGUAGE plpgsql;
+
 -- Function to create access token for an application
 CREATE OR REPLACE FUNCTION create_access_token(application_id UUID, expires_in_minutes INTEGER DEFAULT 30)
-RETURNS UUID AS $$
+RETURNS RECORD AS $$
 DECLARE
   token_id UUID;
   token_value TEXT;
+  token_hash TEXT;
+  result RECORD;
 BEGIN
   -- Generate token
   token_value := generate_secure_token();
   
-  -- Insert token
+  -- Hash token for storage
+  token_hash := hash_token(token_value);
+  
+  -- Insert token hash (not the actual token)
   INSERT INTO access_tokens (
     application_id,
-    token,
+    token_hash,
     expires_at
   ) VALUES (
     application_id,
-    token_value,
+    token_hash,
     CURRENT_TIMESTAMP + (expires_in_minutes || ' minutes')::INTERVAL
   ) RETURNING id INTO token_id;
   
@@ -156,7 +186,9 @@ BEGIN
     access_provided_at = CURRENT_TIMESTAMP
   WHERE id = application_id;
   
-  RETURN token_id;
+  -- Return both the token ID and the actual token (which is never stored)
+  SELECT token_id AS id, token_value AS token INTO result;
+  RETURN result;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -166,11 +198,15 @@ RETURNS UUID AS $$
 DECLARE
   token_record access_tokens%ROWTYPE;
   app_id UUID;
+  token_hash TEXT;
 BEGIN
+  -- Hash the provided token to compare with stored hash
+  token_hash := hash_token(token_value);
+
   -- Get token record
   SELECT * INTO token_record
   FROM access_tokens
-  WHERE token = token_value;
+  WHERE token_hash = token_hash;
   
   -- Check if token exists
   IF token_record IS NULL THEN
@@ -201,7 +237,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Function to confirm access for an application
-CREATE OR REPLACE FUNCTION confirm_application_access(application_id UUID)
+CREATE OR REPLACE FUNCTION confirm_application_access(application_id UUID, is_working BOOLEAN DEFAULT TRUE)
 RETURNS BOOLEAN AS $$
 BEGIN
   -- Update application to confirm access
@@ -209,96 +245,28 @@ BEGIN
   SET 
     access_confirmed = TRUE,
     access_confirmed_at = CURRENT_TIMESTAMP,
-    status = 'completed'
+    status = CASE 
+      WHEN is_working THEN 'completed'
+      ELSE 'problem'
+    END
   WHERE id = application_id;
   
   RETURN FOUND;
 END;
 $$ LANGUAGE plpgsql;
 
--- Function to encrypt sensitive data
-CREATE OR REPLACE FUNCTION encrypt_data(data TEXT, key_id TEXT)
-RETURNS BYTEA AS $$
-DECLARE
-  encrypted_data BYTEA;
+-- Function to increment or decrement safely
+CREATE OR REPLACE FUNCTION increment(val integer, amount integer DEFAULT 1)
+RETURNS integer AS $$
 BEGIN
-  -- In production, use a proper encryption service
-  -- This is a simple example using pgcrypto
-  encrypted_data := pgp_sym_encrypt(
-    data,
-    (SELECT current_setting('app.encryption_key', true))
-  );
-  
-  RETURN encrypted_data;
+  RETURN val + amount;
 END;
 $$ LANGUAGE plpgsql;
 
--- Function to decrypt sensitive data
-CREATE OR REPLACE FUNCTION decrypt_data(encrypted_data BYTEA)
-RETURNS TEXT AS $$
-DECLARE
-  decrypted_data TEXT;
+CREATE OR REPLACE FUNCTION decrement(val integer, amount integer DEFAULT 1)
+RETURNS integer AS $$
 BEGIN
-  -- In production, use a proper encryption service
-  -- This is a simple example using pgcrypto
-  decrypted_data := pgp_sym_decrypt(
-    encrypted_data,
-    (SELECT current_setting('app.encryption_key', true))
-  );
-  
-  RETURN decrypted_data;
-END;
-$$ LANGUAGE plpgsql;
-
--- Function to store encrypted access instructions
-CREATE OR REPLACE FUNCTION store_access_instructions(
-  p_group_sub_id UUID,
-  p_instructions TEXT,
-  p_key_id TEXT DEFAULT 'main-key'
-)
-RETURNS UUID AS $$
-DECLARE
-  instruction_id UUID;
-  encrypted_instructions BYTEA;
-BEGIN
-  -- Encrypt the instructions
-  encrypted_instructions := encrypt_data(p_instructions, p_key_id);
-  
-  -- Check if instructions already exist for this group_sub
-  SELECT id INTO instruction_id
-  FROM access_instructions
-  WHERE group_sub_id = p_group_sub_id;
-  
-  IF instruction_id IS NULL THEN
-    -- Insert new instructions
-    INSERT INTO access_instructions (
-      group_sub_id,
-      encrypted_data,
-      encryption_version,
-      encryption_key_id
-    ) VALUES (
-      p_group_sub_id,
-      encrypted_instructions,
-      '1.0',
-      p_key_id
-    ) RETURNING id INTO instruction_id;
-  ELSE
-    -- Update existing instructions
-    UPDATE access_instructions
-    SET 
-      encrypted_data = encrypted_instructions,
-      encryption_version = '1.0',
-      encryption_key_id = p_key_id,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE id = instruction_id;
-  END IF;
-  
-  -- Set instant_access flag to true for the group_sub
-  UPDATE group_subs
-  SET instant_access = TRUE
-  WHERE id = p_group_sub_id;
-  
-  RETURN instruction_id;
+  RETURN GREATEST(0, val - amount);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -361,7 +329,20 @@ CREATE OR REPLACE FUNCTION complete_transaction(
   p_status TEXT DEFAULT 'completed'
 )
 RETURNS BOOLEAN AS $$
+DECLARE
+  app_id UUID;
+  group_sub_id UUID;
+  has_instant_access BOOLEAN;
 BEGIN
+  -- Get application ID and check for instant access
+  SELECT 
+    t.application_id, 
+    t.group_sub_id,
+    gs.instant_access INTO app_id, group_sub_id, has_instant_access
+  FROM transactions t
+  JOIN group_subs gs ON t.group_sub_id = gs.id
+  WHERE t.id = p_transaction_id;
+
   -- Update transaction status
   UPDATE transactions
   SET 
@@ -374,21 +355,54 @@ BEGIN
   IF p_status = 'completed' THEN
     UPDATE applications
     SET status = 'accepted'
-    WHERE id = (SELECT application_id FROM transactions WHERE id = p_transaction_id);
+    WHERE id = app_id;
     
     -- If the group_sub has instant_access, generate access token
-    IF EXISTS (
-      SELECT 1 
-      FROM group_subs gs
-      JOIN transactions t ON t.group_sub_id = gs.id
-      WHERE t.id = p_transaction_id AND gs.instant_access = TRUE
-    ) THEN
-      PERFORM create_access_token(
-        (SELECT application_id FROM transactions WHERE id = p_transaction_id)
-      );
+    IF has_instant_access THEN
+      -- Use the function but don't save the token (handled by the API)
+      PERFORM create_access_token(app_id);
     END IF;
   END IF;
   
   RETURN FOUND;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to log security events
+CREATE OR REPLACE FUNCTION log_security_event(
+  p_user_id UUID,
+  p_action_type TEXT,
+  p_resource_type TEXT,
+  p_resource_id TEXT,
+  p_status TEXT,
+  p_ip_address TEXT DEFAULT NULL,
+  p_user_agent TEXT DEFAULT NULL,
+  p_details JSONB DEFAULT NULL
+)
+RETURNS UUID AS $$
+DECLARE
+  log_id UUID;
+BEGIN
+  INSERT INTO security_logs (
+    user_id,
+    action_type,
+    resource_type,
+    resource_id,
+    status,
+    ip_address,
+    user_agent,
+    details
+  ) VALUES (
+    p_user_id,
+    p_action_type,
+    p_resource_type,
+    p_resource_id,
+    p_status,
+    p_ip_address,
+    p_user_agent,
+    COALESCE(p_details, '{}'::jsonb)
+  ) RETURNING id INTO log_id;
+  
+  RETURN log_id;
 END;
 $$ LANGUAGE plpgsql;
