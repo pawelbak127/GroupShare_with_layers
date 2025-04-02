@@ -18,7 +18,7 @@ ALTER TABLE device_fingerprints ENABLE ROW LEVEL SECURITY;
 
 -- Create a function to get the current authenticated user ID
 CREATE OR REPLACE FUNCTION auth.user_id() RETURNS UUID AS $$
-  SELECT id FROM user_profiles WHERE external_auth_id = auth.uid()
+  SELECT id FROM user_profiles WHERE external_auth_id = auth.uid()::text
 $$ LANGUAGE SQL SECURITY DEFINER;
 
 -- Create a function to check if a user is a member of a group

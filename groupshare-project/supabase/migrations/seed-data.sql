@@ -287,7 +287,7 @@ BEGIN
         'group',
         'dummy_public_key_1', -- In production, this would be a real public key
         'dummy_encrypted_private_key_1', -- In production, this would be encrypted with a master key
-        'sub11111-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        '11111111-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
         true
     ) RETURNING id INTO key_id1;
     
@@ -302,7 +302,7 @@ BEGIN
         'group',
         'dummy_public_key_2',
         'dummy_encrypted_private_key_2',
-        'sub33333-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        '33333333-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
         true
     ) RETURNING id INTO key_id2;
     
@@ -317,7 +317,7 @@ BEGIN
         'group',
         'dummy_public_key_3',
         'dummy_encrypted_private_key_3',
-        'sub55555-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        '55555555-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
         true
     ) RETURNING id INTO key_id3;
 END $$;
@@ -325,7 +325,7 @@ END $$;
 -- Create subscription offers
 INSERT INTO group_subs (id, group_id, platform_id, status, slots_total, slots_available, price_per_slot, currency, instant_access) VALUES
 (
-  'sub11111-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  '11111111-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
   '11111111-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
   '11111111-1111-1111-1111-111111111111', -- Microsoft 365
   'active',
@@ -336,7 +336,7 @@ INSERT INTO group_subs (id, group_id, platform_id, status, slots_total, slots_av
   true
 ),
 (
-  'sub22222-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  '22222222-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
   '11111111-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
   '33333333-3333-3333-3333-333333333333', -- YouTube Premium
   'active',
@@ -347,7 +347,7 @@ INSERT INTO group_subs (id, group_id, platform_id, status, slots_total, slots_av
   false
 ),
 (
-  'sub33333-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  '33333333-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
   '22222222-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
   '66666666-6666-6666-6666-666666666666', -- Apple One
   'active',
@@ -358,7 +358,7 @@ INSERT INTO group_subs (id, group_id, platform_id, status, slots_total, slots_av
   true
 ),
 (
-  'sub44444-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  '44444444-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
   '22222222-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
   '44444444-4444-4444-4444-444444444444', -- Spotify
   'active',
@@ -369,7 +369,7 @@ INSERT INTO group_subs (id, group_id, platform_id, status, slots_total, slots_av
   false
 ),
 (
-  'sub55555-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  '55555555-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
   '33333333-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
   '77777777-7777-7777-7777-777777777777', -- NordVPN
   'active',
@@ -390,26 +390,26 @@ INSERT INTO access_instructions (
     encryption_version
 ) VALUES 
 (
-    'sub11111-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    '11111111-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
     'dummy_encrypted_data_for_microsoft365', -- In production, this would be real encrypted data
     'dummy_encrypted_key', 
-    (SELECT id FROM encryption_keys WHERE related_id = 'sub11111-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
+    (SELECT id FROM encryption_keys WHERE related_id = '11111111-bbbb-bbbb-bbbb-bbbbbbbbbbbb'),
     'dummy_iv',
     '1.0'
 ),
 (
-    'sub33333-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    '33333333-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
     'dummy_encrypted_data_for_appleone',
     'dummy_encrypted_key',
-    (SELECT id FROM encryption_keys WHERE related_id = 'sub33333-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
+    (SELECT id FROM encryption_keys WHERE related_id = '33333333-bbbb-bbbb-bbbb-bbbbbbbbbbbb'),
     'dummy_iv',
     '1.0'
 ),
 (
-    'sub55555-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    '55555555-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
     'dummy_encrypted_data_for_nordvpn',
     'dummy_encrypted_key',
-    (SELECT id FROM encryption_keys WHERE related_id = 'sub55555-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
+    (SELECT id FROM encryption_keys WHERE related_id = '55555555-bbbb-bbbb-bbbb-bbbbbbbbbbbb'),
     'dummy_iv',
     '1.0'
 );
@@ -417,23 +417,23 @@ INSERT INTO access_instructions (
 -- Create some sample applications
 INSERT INTO applications (id, user_id, group_sub_id, message, status) VALUES
 (
-  'app11111-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  '11111111-cccc-cccc-cccc-cccccccccccc',
   'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
-  'sub11111-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  '11111111-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
   'Chciałbym dołączyć do subskrypcji Microsoft 365. Będę korzystać głównie z Worda i Excela.',
   'accepted'
 ),
 (
-  'app22222-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  '22222222-cccc-cccc-cccc-cccccccccccc',
   'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
-  'sub33333-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  '33333333-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
   'Jestem zainteresowana dołączeniem do Apple One, mam iPhone\'a i iPada.',
   'pending'
 ),
 (
-  'app33333-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  '33333333-cccc-cccc-cccc-cccccccccccc',
   'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
-  'sub44444-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  '44444444-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
   'Chętnie dołączę do Spotify Family, dużo słucham muzyki.',
   'completed'
 );
@@ -442,8 +442,8 @@ INSERT INTO applications (id, user_id, group_sub_id, message, status) VALUES
 SELECT create_transaction(
   'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', -- buyer
   'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', -- seller
-  'sub11111-aaaa-aaaa-aaaa-aaaaaaaaaaaa', -- group_sub
-  'app11111-aaaa-aaaa-aaaa-aaaaaaaaaaaa', -- application
+  '11111111-bbbb-bbbb-bbbb-bbbbbbbbbbbb', -- group_sub
+  '11111111-cccc-cccc-cccc-cccccccccccc', -- application
   300.00, -- amount (annual)
   0.05, -- platform fee percentage
   'card', -- payment method
@@ -454,8 +454,8 @@ SELECT create_transaction(
 SELECT create_transaction(
   'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', -- buyer
   'cccccccc-cccc-cccc-cccc-cccccccccccc', -- seller
-  'sub44444-aaaa-aaaa-aaaa-aaaaaaaaaaaa', -- group_sub
-  'app33333-aaaa-aaaa-aaaa-aaaaaaaaaaaa', -- application
+  '44444444-bbbb-bbbb-bbbb-bbbbbbbbbbbb', -- group_sub
+  '33333333-cccc-cccc-cccc-cccccccccccc', -- application
   25.00, -- amount (monthly)
   0.05, -- platform fee percentage
   'blik', -- payment method
@@ -465,7 +465,7 @@ SELECT create_transaction(
 
 -- Complete one transaction
 SELECT complete_transaction(
-  (SELECT id FROM transactions WHERE application_id = 'app33333-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
+  (SELECT id FROM transactions WHERE application_id = '33333333-cccc-cccc-cccc-cccccccccccc'),
   'completed'
 );
 
@@ -474,7 +474,7 @@ INSERT INTO ratings (rater_id, rated_id, transaction_id, access_quality, communi
 (
   'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', -- rater
   'cccccccc-cccc-cccc-cccc-cccccccccccc', -- rated
-  (SELECT id FROM transactions WHERE application_id = 'app33333-aaaa-aaaa-aaaa-aaaaaaaaaaaa'), -- transaction
+  (SELECT id FROM transactions WHERE application_id = '33333333-cccc-cccc-cccc-cccccccccccc'), -- transaction
   5, -- access quality
   4, -- communication
   5, -- reliability
@@ -485,7 +485,7 @@ INSERT INTO ratings (rater_id, rated_id, transaction_id, access_quality, communi
 (
   'cccccccc-cccc-cccc-cccc-cccccccccccc', -- rater
   'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', -- rated
-  (SELECT id FROM transactions WHERE application_id = 'app33333-aaaa-aaaa-aaaa-aaaaaaaaaaaa'), -- transaction
+  (SELECT id FROM transactions WHERE application_id = '33333333-cccc-cccc-cccc-cccccccccccc'), -- transaction
   5, -- access quality
   5, -- communication
   5, -- reliability
