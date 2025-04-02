@@ -131,8 +131,17 @@ CREATE POLICY "Public users can view active subscription offers" ON group_subs
 -- Group owners and admins can manage subscription offers
 CREATE POLICY "Group admins can manage subscription offers" ON group_subs
   FOR ALL USING (
-    is_group_admin((SELECT group_id FROM group_subs WHERE id = group_subs.id), auth.user_id()) OR
-    is_group_owner((SELECT group_id FROM group_subs WHERE id = group_subs.id), auth.user_id())
+    EXISTS (
+      SELECT 1 FROM groups g 
+      WHERE g.id = group_subs.group_id AND 
+      (
+        EXISTS (
+          SELECT 1 FROM group_members gm
+          WHERE gm.group_id = g.id AND gm.user_id = auth.user_id() AND gm.role = 'admin' AND gm.status = 'active'
+        ) OR
+        g.owner_id = auth.user_id()
+      )
+    )
   );
 
 ----------------------
