@@ -15,12 +15,14 @@ ALTER TABLE ratings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE encryption_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE security_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE device_fingerprints ENABLE ROW LEVEL SECURITY;
-
--- UWAGA: Usunięto zduplikowane deklaracje funkcji, które są już zdefiniowane w 002-functions-schema.sql:
--- auth.user_id()
--- is_group_member()
--- is_group_admin()
--- is_group_owner()
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE message_threads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE message_thread_participants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE group_invitations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE disputes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dispute_comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dispute_evidence ENABLE ROW LEVEL SECURITY;
 
 ----------------------
 -- Policy: user_profiles
@@ -131,7 +133,7 @@ CREATE POLICY "Group admins can manage subscription offers" ON group_subs
 ----------------------
 -- IMPORTANT: access_instructions contains sensitive data and should have very strict policies
 
--- Tylko użytkownicy z zakupem mogą zobaczyć instrukcje dostępu dla subskrypcji
+-- Only users with completed purchase record can view access instructions
 CREATE POLICY "Users can view access instructions for purchased subscriptions" ON access_instructions
   FOR SELECT USING (
     EXISTS (
@@ -140,6 +142,7 @@ CREATE POLICY "Users can view access instructions for purchased subscriptions" O
       WHERE pr.group_sub_id = access_instructions.group_sub_id
       AND pr.user_id = auth.user_id()
       AND pr.status = 'completed'
+      AND pr.access_provided = TRUE
     ) OR
     auth.role() = 'service_role'
   );
@@ -322,3 +325,135 @@ CREATE POLICY "Users can view own device fingerprints" ON device_fingerprints
 -- Only service role can manage device fingerprints
 CREATE POLICY "Service can manage device fingerprints" ON device_fingerprints
   FOR ALL USING (auth.role() = 'service_role');
+
+----------------------
+-- Policy: notifications
+----------------------
+-- Users can view own notifications
+CREATE POLICY "Users can view own notifications" ON notifications
+  FOR SELECT USING (user_id = auth.user_id());
+
+-- Users can mark own notifications as read
+CREATE POLICY "Users can mark own notifications as read" ON notifications
+  FOR UPDATE USING (user_id = auth.user_id())
+  WITH CHECK (user_id = auth.user_id() AND (xmax::text = xmin::text OR is_read IS DISTINCT FROM OLD.is_read));
+
+----------------------
+-- Policy: messages
+----------------------
+-- Users can view messages they sent or received
+CREATE POLICY "Users can view messages they sent or received" ON messages
+  FOR SELECT USING (sender_id = auth.user_id() OR receiver_id = auth.user_id());
+
+-- Users can send messages
+CREATE POLICY "Users can send messages" ON messages
+  FOR INSERT WITH CHECK (sender_id = auth.user_id());
+
+----------------------
+-- Policy: message_threads
+----------------------
+-- Users can view threads they participate in
+CREATE POLICY "Users can view threads they participate in" ON message_threads
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM message_thread_participants 
+      WHERE thread_id = message_threads.id AND user_id = auth.user_id()
+    )
+  );
+
+----------------------
+-- Policy: thread_participants
+----------------------
+-- Users can view thread participants for their threads
+CREATE POLICY "Users can view thread participants for their threads" ON message_thread_participants
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM message_thread_participants 
+      WHERE thread_id = message_thread_participants.thread_id AND user_id = auth.user_id()
+    )
+  );
+
+----------------------
+-- Policy: group_invitations
+----------------------
+-- Group admins can view invitations
+CREATE POLICY "Group admins can view invitations" ON group_invitations
+  FOR SELECT USING (
+    is_group_admin(group_id, auth.user_id()) OR 
+    is_group_owner(group_id, auth.user_id()) OR
+    invited_by = auth.user_id()
+  );
+
+-- Group admins can create invitations
+CREATE POLICY "Group admins can create invitations" ON group_invitations
+  FOR INSERT WITH CHECK (
+    is_group_admin(group_id, auth.user_id()) OR 
+    is_group_owner(group_id, auth.user_id())
+  );
+
+-- Group admins can update invitations
+CREATE POLICY "Group admins can update invitations" ON group_invitations
+  FOR UPDATE USING (
+    is_group_admin(group_id, auth.user_id()) OR 
+    is_group_owner(group_id, auth.user_id()) OR
+    invited_by = auth.user_id()
+  );
+
+----------------------
+-- Policy: disputes
+----------------------
+-- Users can view disputes they reported
+CREATE POLICY "Users can view disputes they reported" ON disputes
+  FOR SELECT USING (
+    reporter_id = auth.user_id() OR
+    resolved_by = auth.user_id() OR
+    auth.role() = 'service_role'
+  );
+
+-- Users can create disputes
+CREATE POLICY "Users can create disputes" ON disputes
+  FOR INSERT WITH CHECK (reporter_id = auth.user_id());
+
+-- Service role can update disputes
+CREATE POLICY "Service role can update disputes" ON disputes
+  FOR UPDATE USING (auth.role() = 'service_role');
+
+----------------------
+-- Policy: dispute_comments
+----------------------
+-- Users can view comments on their disputes
+CREATE POLICY "Users can view comments on their disputes" ON dispute_comments
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM disputes
+      WHERE id = dispute_comments.dispute_id AND reporter_id = auth.user_id()
+    ) OR
+    user_id = auth.user_id() OR
+    auth.role() = 'service_role'
+  );
+
+-- Users can add comments to disputes
+CREATE POLICY "Users can add comments to disputes" ON dispute_comments
+  FOR INSERT WITH CHECK (
+    user_id = auth.user_id()
+  );
+
+----------------------
+-- Policy: dispute_evidence
+----------------------
+-- Users can view evidence on their disputes
+CREATE POLICY "Users can view evidence on their disputes" ON dispute_evidence
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM disputes
+      WHERE id = dispute_evidence.dispute_id AND reporter_id = auth.user_id()
+    ) OR
+    user_id = auth.user_id() OR
+    auth.role() = 'service_role'
+  );
+
+-- Users can add evidence to disputes
+CREATE POLICY "Users can add evidence to disputes" ON dispute_evidence
+  FOR INSERT WITH CHECK (
+    user_id = auth.user_id()
+  );

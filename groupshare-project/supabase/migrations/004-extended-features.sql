@@ -1,226 +1,7 @@
 -- Extended features for GroupShare MVP
--- This script adds critical functionality: notifications, invitations, and dispute resolution
+-- This script adds functions and triggers for additional functionality
 
---------------------------------
--- 1. Notification System
---------------------------------
-
--- Create notifications table
-CREATE TABLE notifications (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-    type TEXT NOT NULL, -- 'payment', 'invitation', 'access', 'purchase', 'dispute'
-    title TEXT NOT NULL,
-    content TEXT NOT NULL,
-    related_entity_type TEXT, -- 'group', 'purchase_record', 'transaction', 'dispute'
-    related_entity_id UUID,
-    is_read BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- Create messages table for direct communication
-CREATE TABLE messages (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    sender_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-    receiver_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-    content TEXT NOT NULL,
-    thread_id UUID, -- Dodane później, więc może być NULL dla starszych wiadomości
-    is_read BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- Create conversation threads table to group messages
-CREATE TABLE message_threads (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    title TEXT,
-    related_entity_type TEXT, -- 'group', 'subscription', 'purchase_record'
-    related_entity_id UUID,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- Create thread participants table
-CREATE TABLE message_thread_participants (
-    thread_id UUID REFERENCES message_threads(id) ON DELETE CASCADE,
-    user_id UUID REFERENCES user_profiles(id) ON DELETE CASCADE,
-    joined_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    last_read_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (thread_id, user_id)
-);
-
--- Dodanie klucza obcego do tabeli messages.thread_id
-ALTER TABLE messages 
-ADD CONSTRAINT fk_messages_thread_id 
-FOREIGN KEY (thread_id) REFERENCES message_threads(id) ON DELETE CASCADE;
-
---------------------------------
--- 2. Group Invitation System
---------------------------------
-
--- Create group invitations table
-CREATE TABLE group_invitations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-    email TEXT NOT NULL,
-    invited_by UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-    role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
-    invitation_token TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected', 'expired')),
-    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
---------------------------------
--- 3. Dispute Resolution System
---------------------------------
-
--- Create disputes table
-CREATE TABLE disputes (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    reporter_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE RESTRICT,
-    reported_entity_type TEXT NOT NULL, -- 'user', 'group', 'subscription', 'transaction'
-    reported_entity_id UUID NOT NULL,
-    transaction_id UUID REFERENCES transactions(id) ON DELETE SET NULL,
-    dispute_type TEXT NOT NULL, -- 'payment', 'access', 'quality', 'behavior'
-    description TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('open', 'investigating', 'resolved', 'rejected')),
-    resolution_note TEXT,
-    resolved_by UUID REFERENCES user_profiles(id) ON DELETE SET NULL,
-    evidence_required BOOLEAN DEFAULT FALSE,
-    resolution_deadline TIMESTAMP WITH TIME ZONE,
-    refund_amount FLOAT,
-    refund_status TEXT CHECK (refund_status IN ('pending', 'processing', 'completed', 'rejected')),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- Create dispute comments table
-CREATE TABLE dispute_comments (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    dispute_id UUID NOT NULL REFERENCES disputes(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-    comment TEXT NOT NULL,
-    is_internal BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- Create dispute evidence table
-CREATE TABLE dispute_evidence (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    dispute_id UUID NOT NULL REFERENCES disputes(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-    title TEXT NOT NULL,
-    description TEXT,
-    evidence_type TEXT NOT NULL, -- 'text', 'screenshot', 'document'
-    content TEXT NOT NULL, -- URL or text content
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
---------------------------------
--- Create indexes for performance
---------------------------------
-
--- Notification indexes
-CREATE INDEX idx_notifications_user_id ON notifications(user_id);
-CREATE INDEX idx_notifications_type ON notifications(type);
-CREATE INDEX idx_notifications_is_read ON notifications(user_id, is_read);
-CREATE INDEX idx_notifications_related_entity ON notifications(related_entity_type, related_entity_id);
-
--- Message indexes
-CREATE INDEX idx_messages_sender_id ON messages(sender_id);
-CREATE INDEX idx_messages_receiver_id ON messages(receiver_id);
-CREATE INDEX idx_messages_thread_id ON messages(thread_id);
-CREATE INDEX idx_messages_created_at ON messages(created_at);
-
--- Thread indexes
-CREATE INDEX idx_message_threads_related_entity ON message_threads(related_entity_type, related_entity_id);
-CREATE INDEX idx_message_thread_participants_user_id ON message_thread_participants(user_id);
-
--- Invitation indexes
-CREATE INDEX idx_group_invitations_group_id ON group_invitations(group_id);
-CREATE INDEX idx_group_invitations_email ON group_invitations(email);
-CREATE INDEX idx_group_invitations_token ON group_invitations(invitation_token);
-CREATE INDEX idx_group_invitations_status ON group_invitations(status);
-
--- Dispute indexes
-CREATE INDEX idx_disputes_reporter_id ON disputes(reporter_id);
-CREATE INDEX idx_disputes_reported_entity ON disputes(reported_entity_type, reported_entity_id);
-CREATE INDEX idx_disputes_transaction_id ON disputes(transaction_id);
-CREATE INDEX idx_disputes_status ON disputes(status);
-CREATE INDEX idx_dispute_comments_dispute_id ON dispute_comments(dispute_id);
-CREATE INDEX idx_dispute_evidence_dispute_id ON dispute_evidence(dispute_id);
-
---------------------------------
--- Add triggers for updated_at
---------------------------------
-
--- Update trigger for message_threads
-CREATE TRIGGER update_message_threads_updated_at
-BEFORE UPDATE ON message_threads
-FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
-
--- Update trigger for group_invitations
-CREATE TRIGGER update_group_invitations_updated_at
-BEFORE UPDATE ON group_invitations
-FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
-
--- Update trigger for disputes
-CREATE TRIGGER update_disputes_updated_at
-BEFORE UPDATE ON disputes
-FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
-
---------------------------------
--- Functions for new features
---------------------------------
-
--- Function to create a notification
-CREATE OR REPLACE FUNCTION create_notification(
-    p_user_id UUID,
-    p_type TEXT,
-    p_title TEXT,
-    p_content TEXT,
-    p_related_entity_type TEXT DEFAULT NULL,
-    p_related_entity_id UUID DEFAULT NULL
-) RETURNS UUID AS $$
-DECLARE
-    notification_id UUID;
-BEGIN
-    -- Walidacja parametrów wejściowych
-    IF p_user_id IS NULL THEN
-        RAISE EXCEPTION 'User ID cannot be NULL';
-    END IF;
-    
-    IF p_type IS NULL OR p_title IS NULL OR p_content IS NULL THEN
-        RAISE EXCEPTION 'Notification type, title, and content cannot be NULL';
-    END IF;
-    
-    -- Wstawianie powiadomienia
-    INSERT INTO notifications (
-        user_id,
-        type,
-        title,
-        content,
-        related_entity_type,
-        related_entity_id
-    ) VALUES (
-        p_user_id,
-        p_type,
-        p_title,
-        p_content,
-        p_related_entity_type,
-        p_related_entity_id
-    ) RETURNING id INTO notification_id;
-    
-    RETURN notification_id;
-EXCEPTION
-    WHEN OTHERS THEN
-        RAISE NOTICE 'Error in create_notification: %', SQLERRM;
-        RETURN NULL; -- Zwracamy NULL zamiast rzucać wyjątek, aby nie przerywać głównej operacji
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- Function to create a message thread
+-- Create a function to create a message thread
 CREATE OR REPLACE FUNCTION create_message_thread(
     p_title TEXT,
     p_participants UUID[],
@@ -720,105 +501,81 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
---------------------------------
--- Set up RLS policies
---------------------------------
+-- Create a function to check suspicious activity
+CREATE OR REPLACE FUNCTION check_suspicious_activity(
+    p_user_id UUID,
+    p_action TEXT,
+    p_ip_address TEXT,
+    p_user_agent TEXT
+) RETURNS BOOLEAN AS $$
+DECLARE
+    suspicious BOOLEAN := FALSE;
+    recent_activities INTEGER;
+    different_ips INTEGER;
+    usual_ip TEXT;
+BEGIN
+    -- Walidacja danych wejściowych
+    IF p_user_id IS NULL THEN
+        RETURN FALSE;
+    END IF;
+    
+    -- Sprawdzenie liczby aktywności w ostatniej godzinie
+    SELECT COUNT(*) INTO recent_activities
+    FROM security_logs
+    WHERE user_id = p_user_id
+      AND created_at > NOW() - INTERVAL '1 hour';
+      
+    IF recent_activities > 100 THEN -- Próg do dostosowania
+        suspicious := TRUE;
+    END IF;
+    
+    -- Sprawdzenie różnych adresów IP w krótkim czasie
+    SELECT COUNT(DISTINCT ip_address) INTO different_ips
+    FROM security_logs
+    WHERE user_id = p_user_id
+      AND created_at > NOW() - INTERVAL '24 hours';
+      
+    -- Pobranie najczęściej używanego IP
+    SELECT ip_address INTO usual_ip
+    FROM security_logs
+    WHERE user_id = p_user_id
+      AND ip_address IS NOT NULL
+    GROUP BY ip_address
+    ORDER BY COUNT(*) DESC
+    LIMIT 1;
+    
+    -- Jeśli jest wiele różnych IP i obecne IP nie jest zwykle używanym
+    IF different_ips > 5 AND p_ip_address <> usual_ip THEN
+        suspicious := TRUE;
+    END IF;
+    
+    -- Jeśli aktywność jest podejrzana, zapisz zdarzenie
+    IF suspicious THEN
+        PERFORM log_security_event(
+            p_user_id,
+            'suspicious_activity',
+            'user',
+            p_user_id::text,
+            'warning',
+            p_ip_address,
+            p_user_agent,
+            jsonb_build_object(
+                'action', p_action,
+                'recent_activities', recent_activities,
+                'different_ips', different_ips
+            )
+        );
+    END IF;
+    
+    RETURN suspicious;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'Error in check_suspicious_activity: %', SQLERRM;
+        RETURN FALSE;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Enable RLS on new tables
-ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
-ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
-ALTER TABLE message_threads ENABLE ROW LEVEL SECURITY;
-ALTER TABLE message_thread_participants ENABLE ROW LEVEL SECURITY;
-ALTER TABLE group_invitations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE disputes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE dispute_comments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE dispute_evidence ENABLE ROW LEVEL SECURITY;
-
--- Notifications policies
-CREATE POLICY "Users can view own notifications" ON notifications
-  FOR SELECT USING (user_id = auth.user_id());
-
-CREATE POLICY "Users can mark own notifications as read" ON notifications
-  FOR UPDATE USING (user_id = auth.user_id())
-  WITH CHECK (user_id = auth.user_id() AND (xmax::text = xmin::text OR is_read IS DISTINCT FROM OLD.is_read));
-
--- Messages policies
-CREATE POLICY "Users can view messages they sent or received" ON messages
-  FOR SELECT USING (sender_id = auth.user_id() OR receiver_id = auth.user_id());
-
-CREATE POLICY "Users can send messages" ON messages
-  FOR INSERT WITH CHECK (sender_id = auth.user_id());
-
--- Message threads policies
-CREATE POLICY "Users can view threads they participate in" ON message_threads
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM message_thread_participants 
-      WHERE thread_id = message_threads.id AND user_id = auth.user_id()
-    )
-  );
-
--- Thread participants policies
-CREATE POLICY "Users can view thread participants for their threads" ON message_thread_participants
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM message_thread_participants 
-      WHERE thread_id = message_thread_participants.thread_id AND user_id = auth.user_id()
-    )
-  );
-
--- Group invitations policies
-CREATE POLICY "Group admins can view invitations" ON group_invitations
-  FOR SELECT USING (
-    is_group_admin(group_id, auth.user_id()) OR 
-    is_group_owner(group_id, auth.user_id()) OR
-    invited_by = auth.user_id()
-  );
-
-CREATE POLICY "Group admins can create invitations" ON group_invitations
-  FOR INSERT WITH CHECK (
-    is_group_admin(group_id, auth.user_id()) OR 
-    is_group_owner(group_id, auth.user_id())
-  );
-
-CREATE POLICY "Group admins can update invitations" ON group_invitations
-  FOR UPDATE USING (
-    is_group_admin(group_id, auth.user_id()) OR 
-    is_group_owner(group_id, auth.user_id()) OR
-    invited_by = auth.user_id()
-  );
-
--- Disputes policies
-CREATE POLICY "Users can view disputes they reported" ON disputes
-  FOR SELECT USING (
-    reporter_id = auth.user_id() OR
-    resolved_by = auth.user_id() OR
-    auth.role() = 'service_role'
-  );
-
-CREATE POLICY "Users can create disputes" ON disputes
-  FOR INSERT WITH CHECK (reporter_id = auth.user_id());
-
-CREATE POLICY "Service role can update disputes" ON disputes
-  FOR UPDATE USING (auth.role() = 'service_role');
-
--- Dispute comments policies
-CREATE POLICY "Users can view comments on their disputes" ON dispute_comments
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM disputes
-      WHERE id = dispute_comments.dispute_id AND reporter_id = auth.user_id()
-    ) OR
-    user_id = auth.user_id() OR
-    auth.role() = 'service_role'
-  );
-
-CREATE POLICY "Users can add comments to disputes" ON dispute_comments
-  FOR INSERT WITH CHECK (
-    user_id = auth.user_id()
-  );
-
--- Create triggers for notifications on purchase_record status changes
+-- Create trigger for notifying purchase record status changes
 CREATE OR REPLACE FUNCTION notify_purchase_record_status_change()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -858,7 +615,7 @@ BEGIN
     END IF;
     
     -- Notify subscription owner about new purchases
-    IF OLD.status IS NULL OR OLD.status <> 'pending_payment' AND NEW.status = 'pending_payment' THEN
+    IF (OLD.status IS NULL OR OLD.status <> 'pending_payment') AND NEW.status = 'pending_payment' THEN
       PERFORM create_notification(
         (SELECT owner_id FROM groups WHERE id = (SELECT group_id FROM group_subs WHERE id = NEW.group_sub_id)),
         'purchase',
@@ -882,55 +639,3 @@ CREATE TRIGGER notify_on_purchase_record_status_change
 AFTER UPDATE OF status ON purchase_records
 FOR EACH ROW
 EXECUTE FUNCTION notify_purchase_record_status_change();
-
--- Create trigger for notifying when payment is completed
-CREATE OR REPLACE FUNCTION notify_payment_status_change()
-RETURNS TRIGGER AS $$
-BEGIN
-  IF NEW.status <> OLD.status THEN
-    -- Notify buyer when payment is completed
-    IF NEW.status = 'completed' THEN
-      PERFORM create_notification(
-        NEW.buyer_id,
-        'payment',
-        'Payment completed',
-        'Your payment has been processed successfully',
-        'transaction',
-        NEW.id
-      );
-      
-      -- Notify seller
-      PERFORM create_notification(
-        NEW.seller_id,
-        'payment',
-        'Payment received',
-        'You have received a payment',
-        'transaction',
-        NEW.id
-      );
-    
-    -- Notify buyer when payment fails
-    ELSIF NEW.status = 'failed' THEN
-      PERFORM create_notification(
-        NEW.buyer_id,
-        'payment',
-        'Payment failed',
-        'Your payment could not be processed',
-        'transaction',
-        NEW.id
-      );
-    END IF;
-  END IF;
-  
-  RETURN NEW;
-EXCEPTION
-  WHEN OTHERS THEN
-    RAISE NOTICE 'Error in notify_payment_status_change: %', SQLERRM;
-    RETURN NEW; -- Zapewniamy, że błąd w powiadomieniach nie blokuje głównej operacji
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER notify_on_payment_status_change
-AFTER UPDATE OF status ON transactions
-FOR EACH ROW
-EXECUTE FUNCTION notify_payment_status_change();

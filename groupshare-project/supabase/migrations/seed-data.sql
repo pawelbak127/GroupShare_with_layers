@@ -322,8 +322,8 @@ BEGIN
     ) RETURNING id INTO key_id3;
 END $$;
 
--- Create subscription offers
-INSERT INTO group_subs (id, group_id, platform_id, status, slots_total, slots_available, price_per_slot, currency, instant_access) VALUES
+-- Create subscription offers (removed instant_access column)
+INSERT INTO group_subs (id, group_id, platform_id, status, slots_total, slots_available, price_per_slot, currency) VALUES
 (
   '11111111-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
   '11111111-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
@@ -332,8 +332,7 @@ INSERT INTO group_subs (id, group_id, platform_id, status, slots_total, slots_av
   6,
   3,
   25.00,
-  'PLN',
-  true
+  'PLN'
 ),
 (
   '22222222-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
@@ -343,8 +342,7 @@ INSERT INTO group_subs (id, group_id, platform_id, status, slots_total, slots_av
   6,
   4,
   20.00,
-  'PLN',
-  false
+  'PLN'
 ),
 (
   '33333333-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
@@ -354,8 +352,7 @@ INSERT INTO group_subs (id, group_id, platform_id, status, slots_total, slots_av
   6,
   2,
   30.00,
-  'PLN',
-  true
+  'PLN'
 ),
 (
   '44444444-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
@@ -365,8 +362,7 @@ INSERT INTO group_subs (id, group_id, platform_id, status, slots_total, slots_av
   6,
   2,
   25.00,
-  'PLN',
-  false
+  'PLN'
 ),
 (
   '55555555-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
@@ -376,11 +372,10 @@ INSERT INTO group_subs (id, group_id, platform_id, status, slots_total, slots_av
   6,
   4,
   20.00,
-  'PLN',
-  true
+  'PLN'
 );
 
--- Add access instructions for offers with instant_access
+-- Add access instructions for subscriptions
 INSERT INTO access_instructions (
     group_sub_id, 
     encrypted_data, 
@@ -414,79 +409,216 @@ INSERT INTO access_instructions (
     '1.0'
 );
 
--- Create some sample purchase_records (replacing applications)
-INSERT INTO purchase_records (id, user_id, group_sub_id, status) VALUES
+-- Create some sample purchase_records - all have access immediately after payment completion
+INSERT INTO purchase_records (id, user_id, group_sub_id, status, access_provided, access_provided_at) VALUES
 (
   '11111111-cccc-cccc-cccc-cccccccccccc',
   'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
   '11111111-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
-  'payment_processing'
+  'payment_processing',
+  FALSE,
+  NULL
 ),
 (
   '22222222-cccc-cccc-cccc-cccccccccccc',
   'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
   '33333333-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
-  'pending_payment'
+  'pending_payment',
+  FALSE,
+  NULL
 ),
 (
   '33333333-cccc-cccc-cccc-cccccccccccc',
   'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
   '44444444-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
-  'completed'
+  'completed',
+  TRUE,
+  NOW() - INTERVAL '2 days'
 );
 
--- Używamy istniejących funkcji z pliku 002-functions-schema.sql, a nie redefiniujemy je
-
--- Tworzenie przykładowych transakcji
-SELECT create_transaction(
-  'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', -- buyer
-  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', -- seller
-  '11111111-bbbb-bbbb-bbbb-bbbbbbbbbbbb', -- group_sub
-  '11111111-cccc-cccc-cccc-cccccccccccc', -- purchase_record
-  300.00, -- amount (annual)
-  0.05, -- platform fee percentage
-  'card', -- payment method
-  'stripe', -- payment provider
-  'mock_payment_id_1' -- payment id
-);
-
-SELECT create_transaction(
-  'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', -- buyer
-  'cccccccc-cccc-cccc-cccc-cccccccccccc', -- seller
-  '44444444-bbbb-bbbb-bbbb-bbbbbbbbbbbb', -- group_sub
-  '33333333-cccc-cccc-cccc-cccccccccccc', -- purchase_record
-  25.00, -- amount (monthly)
-  0.05, -- platform fee percentage
-  'blik', -- payment method
-  'payu', -- payment provider
-  'mock_payment_id_2' -- payment id
-);
-
--- Zakończenie jednej transakcji
-SELECT complete_transaction(
-  (SELECT id FROM transactions WHERE purchase_record_id = '33333333-cccc-cccc-cccc-cccccccccccc'),
-  'completed'
+-- Create sample transactions
+INSERT INTO transactions (
+    id,
+    buyer_id,
+    seller_id,
+    group_sub_id,
+    purchase_record_id,
+    amount,
+    platform_fee,
+    seller_amount,
+    currency,
+    payment_method,
+    payment_provider,
+    payment_id,
+    status,
+    created_at,
+    completed_at
+) VALUES
+(
+    'aaaaaaaa-dddd-dddd-dddd-dddddddddddd',
+    'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', -- buyer
+    'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', -- seller
+    '11111111-bbbb-bbbb-bbbb-bbbbbbbbbbbb', -- group_sub
+    '11111111-cccc-cccc-cccc-cccccccccccc', -- purchase_record
+    300.00, -- amount (annual)
+    15.00, -- platform fee
+    285.00, -- seller amount
+    'PLN', -- currency
+    'card', -- payment method
+    'stripe', -- payment provider
+    'mock_payment_id_1', -- payment id
+    'processing', -- status
+    NOW() - INTERVAL '1 day', -- created_at
+    NULL -- completed_at
+),
+(
+    'bbbbbbbb-dddd-dddd-dddd-dddddddddddd',
+    'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', -- buyer
+    'cccccccc-cccc-cccc-cccc-cccccccccccc', -- seller
+    '44444444-bbbb-bbbb-bbbb-bbbbbbbbbbbb', -- group_sub
+    '33333333-cccc-cccc-cccc-cccccccccccc', -- purchase_record
+    25.00, -- amount (monthly)
+    1.25, -- platform fee
+    23.75, -- seller amount
+    'PLN', -- currency
+    'blik', -- payment method
+    'payu', -- payment provider
+    'mock_payment_id_2', -- payment id
+    'completed', -- status
+    NOW() - INTERVAL '3 days', -- created_at
+    NOW() - INTERVAL '2 days' -- completed_at
 );
 
 -- Add some ratings
-INSERT INTO ratings (rater_id, rated_id, transaction_id, access_quality, communication, reliability, comment) VALUES
+INSERT INTO ratings (rater_id, rated_id, transaction_id, access_quality, communication, reliability, comment, created_at) VALUES
 (
   'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', -- rater
   'cccccccc-cccc-cccc-cccc-cccccccccccc', -- rated
-  (SELECT id FROM transactions WHERE purchase_record_id = '33333333-cccc-cccc-cccc-cccccccccccc'), -- transaction
+  'bbbbbbbb-dddd-dddd-dddd-dddddddddddd', -- transaction
   5, -- access quality
   4, -- communication
   5, -- reliability
-  'Szybko i sprawnie, dostęp działa bez problemów.'
-);
-
-INSERT INTO ratings (rater_id, rated_id, transaction_id, access_quality, communication, reliability, comment) VALUES
+  'Szybko i sprawnie, dostęp działa bez problemów.',
+  NOW() - INTERVAL '1 day'
+),
 (
   'cccccccc-cccc-cccc-cccc-cccccccccccc', -- rater
   'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', -- rated
-  (SELECT id FROM transactions WHERE purchase_record_id = '33333333-cccc-cccc-cccc-cccccccccccc'), -- transaction
+  'bbbbbbbb-dddd-dddd-dddd-dddddddddddd', -- transaction
   5, -- access quality
   5, -- communication
   5, -- reliability
-  'Wzorowy członek grupy, płatność na czas.'
+  'Wzorowy członek grupy, płatność na czas.',
+  NOW() - INTERVAL '1 day'
+);
+
+-- Create sample notifications
+INSERT INTO notifications (user_id, type, title, content, related_entity_type, related_entity_id, is_read, created_at) VALUES
+(
+  'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+  'payment',
+  'Payment completed',
+  'Your payment has been processed successfully',
+  'transaction',
+  'bbbbbbbb-dddd-dddd-dddd-dddddddddddd',
+  true,
+  NOW() - INTERVAL '2 days'
+),
+(
+  'cccccccc-cccc-cccc-cccc-cccccccccccc',
+  'payment',
+  'Payment received',
+  'You have received a payment',
+  'transaction',
+  'bbbbbbbb-dddd-dddd-dddd-dddddddddddd',
+  true,
+  NOW() - INTERVAL '2 days'
+),
+(
+  'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+  'access',
+  'Access granted',
+  'You now have access to your subscription. Check your account for access details.',
+  'purchase_record',
+  '33333333-cccc-cccc-cccc-cccccccccccc',
+  true,
+  NOW() - INTERVAL '2 days'
+);
+
+-- Create sample message thread
+INSERT INTO message_threads (id, title, created_at, updated_at) VALUES
+(
+  'aaaaaaaa-eeee-eeee-eeee-eeeeeeeeeeee',
+  'Direct message',
+  NOW() - INTERVAL '3 days',
+  NOW() - INTERVAL '1 day'
+);
+
+-- Add participants to the message thread
+INSERT INTO message_thread_participants (thread_id, user_id, joined_at, last_read_at) VALUES
+(
+  'aaaaaaaa-eeee-eeee-eeee-eeeeeeeeeeee',
+  'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+  NOW() - INTERVAL '3 days',
+  NOW() - INTERVAL '1 day'
+),
+(
+  'aaaaaaaa-eeee-eeee-eeee-eeeeeeeeeeee',
+  'cccccccc-cccc-cccc-cccc-cccccccccccc',
+  NOW() - INTERVAL '3 days',
+  NOW() - INTERVAL '1 day'
+);
+
+-- Add messages to the thread
+INSERT INTO messages (id, sender_id, receiver_id, content, thread_id, is_read, created_at) VALUES
+(
+  'aaaaaaaa-ffff-ffff-ffff-ffffffffffff',
+  'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+  'cccccccc-cccc-cccc-cccc-cccccccccccc',
+  'Cześć, mam pytanie odnośnie dostępu do Spotify. Kiedy mogę otrzymać dane logowania?',
+  'aaaaaaaa-eeee-eeee-eeee-eeeeeeeeeeee',
+  true,
+  NOW() - INTERVAL '3 days'
+),
+(
+  'bbbbbbbb-ffff-ffff-ffff-ffffffffffff',
+  'cccccccc-cccc-cccc-cccc-cccccccccccc',
+  'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+  'Cześć! Dostęp został już przyznany automatycznie. Sprawdź swoją skrzynkę odbiorczą lub sekcję "Moje subskrypcje" w aplikacji.',
+  'aaaaaaaa-eeee-eeee-eeee-eeeeeeeeeeee',
+  true,
+  NOW() - INTERVAL '2 days'
+),
+(
+  'cccccccc-ffff-ffff-ffff-ffffffffffff',
+  'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+  'cccccccc-cccc-cccc-cccc-cccccccccccc',
+  'Znalazłem, dziękuję! Wszystko działa świetnie.',
+  'aaaaaaaa-eeee-eeee-eeee-eeeeeeeeeeee',
+  true,
+  NOW() - INTERVAL '1 day'
+);
+
+-- Create sample group invitation
+INSERT INTO group_invitations (
+  id, 
+  group_id, 
+  email, 
+  invited_by, 
+  role, 
+  invitation_token, 
+  status, 
+  expires_at, 
+  created_at
+) VALUES
+(
+  'aaaaaaaa-gggg-gggg-gggg-gggggggggggg',
+  '11111111-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  'nowy.uzytkownik@example.com',
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  'member',
+  'dummy_invitation_token_1',
+  'pending',
+  NOW() + INTERVAL '7 days',
+  NOW() - INTERVAL '1 day'
 );
