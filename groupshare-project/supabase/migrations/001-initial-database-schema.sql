@@ -25,7 +25,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- Create security_logs table for audit trail
 CREATE TABLE security_logs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID,
+    user_id UUID, -- Może być NULL, gdy log nie jest powiązany z użytkownikiem
     action_type TEXT NOT NULL,
     resource_type TEXT NOT NULL,
     resource_id TEXT NOT NULL,
@@ -84,7 +84,7 @@ CREATE TABLE group_members (
     user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
     role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
     status TEXT NOT NULL CHECK (status IN ('invited', 'active', 'suspended')),
-    invited_by UUID REFERENCES user_profiles(id),
+    invited_by UUID REFERENCES user_profiles(id) ON DELETE SET NULL,
     joined_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (group_id, user_id)
@@ -122,7 +122,7 @@ CREATE TABLE subscription_platforms (
 CREATE TABLE group_subs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-    platform_id UUID NOT NULL REFERENCES subscription_platforms(id),
+    platform_id UUID NOT NULL REFERENCES subscription_platforms(id) ON DELETE RESTRICT,
     status TEXT NOT NULL CHECK (status IN ('active', 'inactive', 'full')),
     slots_total INTEGER NOT NULL,
     slots_available INTEGER NOT NULL,
@@ -139,7 +139,7 @@ CREATE TABLE access_instructions (
     group_sub_id UUID NOT NULL REFERENCES group_subs(id) ON DELETE CASCADE,
     encrypted_data TEXT NOT NULL,
     data_key_enc TEXT NOT NULL,
-    encryption_key_id UUID NOT NULL REFERENCES encryption_keys(id),
+    encryption_key_id UUID NOT NULL REFERENCES encryption_keys(id) ON DELETE RESTRICT,
     iv TEXT NOT NULL,
     encryption_version TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -176,10 +176,10 @@ CREATE TABLE access_tokens (
 -- Create transactions table
 CREATE TABLE transactions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    buyer_id UUID NOT NULL REFERENCES user_profiles(id),
-    seller_id UUID NOT NULL REFERENCES user_profiles(id),
-    group_sub_id UUID NOT NULL REFERENCES group_subs(id),
-    purchase_record_id UUID NOT NULL REFERENCES purchase_records(id),
+    buyer_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE RESTRICT,
+    seller_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE RESTRICT,
+    group_sub_id UUID NOT NULL REFERENCES group_subs(id) ON DELETE RESTRICT,
+    purchase_record_id UUID NOT NULL REFERENCES purchase_records(id) ON DELETE CASCADE,
     amount FLOAT NOT NULL,
     platform_fee FLOAT NOT NULL,
     seller_amount FLOAT NOT NULL,
@@ -196,9 +196,9 @@ CREATE TABLE transactions (
 -- Create ratings table
 CREATE TABLE ratings (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    rater_id UUID NOT NULL REFERENCES user_profiles(id),
-    rated_id UUID NOT NULL REFERENCES user_profiles(id),
-    transaction_id UUID NOT NULL REFERENCES transactions(id),
+    rater_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+    rated_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+    transaction_id UUID NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
     access_quality INTEGER CHECK (access_quality BETWEEN 1 AND 5),
     communication INTEGER CHECK (communication BETWEEN 1 AND 5),
     reliability INTEGER CHECK (reliability BETWEEN 1 AND 5),
@@ -206,6 +206,17 @@ CREATE TABLE ratings (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (rater_id, transaction_id)
 );
+
+-- Dodawanie brakujących relacji klucza obcego
+-- Dodaj ograniczenie klucza obcego do security_logs.user_id
+ALTER TABLE security_logs 
+ADD CONSTRAINT fk_security_logs_user_profiles 
+FOREIGN KEY (user_id) REFERENCES user_profiles(id) ON DELETE SET NULL;
+
+-- Dodaj ograniczenie klucza obcego do device_fingerprints.user_id
+ALTER TABLE device_fingerprints 
+ADD CONSTRAINT fk_device_fingerprints_user_profiles 
+FOREIGN KEY (user_id) REFERENCES user_profiles(id) ON DELETE CASCADE;
 
 -- Add indexes for better performance
 CREATE INDEX idx_user_profiles_external_auth_id ON user_profiles(external_auth_id);

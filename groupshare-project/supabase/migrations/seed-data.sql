@@ -435,109 +435,9 @@ INSERT INTO purchase_records (id, user_id, group_sub_id, status) VALUES
   'completed'
 );
 
--- IMPORTANT: Drop existing transaction functions first to avoid parameter conflicts
-DROP FUNCTION IF EXISTS create_transaction(UUID, UUID, UUID, UUID, FLOAT, FLOAT, TEXT, TEXT, TEXT);
-DROP FUNCTION IF EXISTS complete_transaction(UUID, TEXT);
+-- Używamy istniejących funkcji z pliku 002-functions-schema.sql, a nie redefiniujemy je
 
--- Create function to create a transaction with exact parameter types matching existing function
-CREATE OR REPLACE FUNCTION create_transaction(
-    p_buyer_id UUID,
-    p_seller_id UUID,
-    p_group_sub_id UUID,
-    p_purchase_record_id UUID,
-    p_amount FLOAT,
-    p_platform_fee_percent FLOAT,
-    p_payment_method TEXT,
-    p_payment_provider TEXT,  -- No default value to match existing function
-    p_payment_id TEXT         -- No default value to match existing function
-) RETURNS UUID AS $$
-DECLARE
-    transaction_id UUID;
-    platform_fee FLOAT;
-    seller_amount FLOAT;
-BEGIN
-    -- Calculate fees
-    platform_fee := p_amount * p_platform_fee_percent;
-    seller_amount := p_amount - platform_fee;
-    
-    -- Create transaction
-    INSERT INTO transactions (
-        buyer_id,
-        seller_id,
-        group_sub_id,
-        purchase_record_id,
-        amount,
-        platform_fee,
-        seller_amount,
-        payment_method,
-        payment_provider,
-        payment_id,
-        status
-    ) VALUES (
-        p_buyer_id,
-        p_seller_id,
-        p_group_sub_id,
-        p_purchase_record_id,
-        p_amount,
-        platform_fee,
-        seller_amount,
-        p_payment_method,
-        p_payment_provider,
-        p_payment_id,
-        'pending'
-    ) RETURNING id INTO transaction_id;
-    
-    RETURN transaction_id;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create function to complete a transaction
-CREATE OR REPLACE FUNCTION complete_transaction(
-    p_transaction_id UUID,
-    p_status TEXT
-) RETURNS BOOLEAN AS $$
-DECLARE
-    v_purchase_record_id UUID;  -- Zmieniona nazwa zmiennej, aby uniknąć niejednoznaczności
-BEGIN
-    -- Get purchase record ID
-    SELECT purchase_record_id INTO v_purchase_record_id
-    FROM transactions
-    WHERE id = p_transaction_id;
-    
-    -- Update transaction
-    UPDATE transactions
-    SET 
-        status = p_status,
-        completed_at = CASE WHEN p_status = 'completed' THEN CURRENT_TIMESTAMP ELSE NULL END,
-        updated_at = CURRENT_TIMESTAMP
-    WHERE id = p_transaction_id;
-    
-    -- If completed, update purchase record
-    IF p_status = 'completed' THEN
-        UPDATE purchase_records
-        SET 
-            status = 'completed',
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = v_purchase_record_id;  -- Używamy zmiennej o innej nazwie
-    ELSIF p_status = 'failed' THEN
-        UPDATE purchase_records
-        SET 
-            status = 'failed',
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = v_purchase_record_id;
-    ELSIF p_status = 'refunded' THEN
-        UPDATE purchase_records
-        SET 
-            status = 'refunded',
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = v_purchase_record_id;
-    END IF;
-    
-    RETURN TRUE;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create some sample transactions
+-- Tworzenie przykładowych transakcji
 SELECT create_transaction(
   'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', -- buyer
   'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', -- seller
@@ -562,7 +462,7 @@ SELECT create_transaction(
   'mock_payment_id_2' -- payment id
 );
 
--- Complete one transaction
+-- Zakończenie jednej transakcji
 SELECT complete_transaction(
   (SELECT id FROM transactions WHERE purchase_record_id = '33333333-cccc-cccc-cccc-cccccccccccc'),
   'completed'

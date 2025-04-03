@@ -16,41 +16,23 @@ ALTER TABLE encryption_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE security_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE device_fingerprints ENABLE ROW LEVEL SECURITY;
 
--- Create a function to get the current authenticated user ID
-CREATE OR REPLACE FUNCTION auth.user_id() RETURNS UUID AS $$
-  SELECT id FROM user_profiles WHERE external_auth_id = auth.uid()::text
-$$ LANGUAGE SQL SECURITY DEFINER;
-
--- Create a function to check if a user is a member of a group
-CREATE OR REPLACE FUNCTION is_group_member(group_id UUID, user_id UUID) RETURNS BOOLEAN AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM group_members 
-    WHERE group_id = $1 AND user_id = $2 AND status = 'active'
-  );
-$$ LANGUAGE SQL SECURITY DEFINER;
-
--- Create a function to check if a user is a group admin
-CREATE OR REPLACE FUNCTION is_group_admin(group_id UUID, user_id UUID) RETURNS BOOLEAN AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM group_members 
-    WHERE group_id = $1 AND user_id = $2 AND role = 'admin' AND status = 'active'
-  );
-$$ LANGUAGE SQL SECURITY DEFINER;
-
--- Create a function to check if a user is a group owner
-CREATE OR REPLACE FUNCTION is_group_owner(group_id UUID, user_id UUID) RETURNS BOOLEAN AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM groups 
-    WHERE id = $1 AND owner_id = $2
-  );
-$$ LANGUAGE SQL SECURITY DEFINER;
+-- UWAGA: Usunięto zduplikowane deklaracje funkcji, które są już zdefiniowane w 002-functions-schema.sql:
+-- auth.user_id()
+-- is_group_member()
+-- is_group_admin()
+-- is_group_owner()
 
 ----------------------
 -- Policy: user_profiles
 ----------------------
--- Anyone can see basic user profile information
-CREATE POLICY "Public users can view profiles" ON user_profiles
-  FOR SELECT USING (true);
+-- Każdy może zobaczyć tylko podstawowe informacje o profilu
+CREATE POLICY "Public users can view basic profile info" ON user_profiles
+  FOR SELECT USING (true)
+  WITH CHECK (verification_level = 'basic');
+
+-- Dodatkowa polityka dla uwierzytelnionych użytkowników umożliwiająca pełny dostęp
+CREATE POLICY "Authenticated users can view full profiles" ON user_profiles
+  FOR SELECT USING (auth.role() = 'authenticated');
 
 -- Users can update only their own profiles
 CREATE POLICY "Users can update own profile" ON user_profiles
@@ -149,10 +131,18 @@ CREATE POLICY "Group admins can manage subscription offers" ON group_subs
 ----------------------
 -- IMPORTANT: access_instructions contains sensitive data and should have very strict policies
 
--- NO SELECT policy for access_instructions - data should only be accessed via API with proper encryption handling
--- Only service role can read access instructions directly
-CREATE POLICY "Service can read access instructions" ON access_instructions
-  FOR SELECT USING (auth.role() = 'service_role');
+-- Tylko użytkownicy z zakupem mogą zobaczyć instrukcje dostępu dla subskrypcji
+CREATE POLICY "Users can view access instructions for purchased subscriptions" ON access_instructions
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 
+      FROM purchase_records pr
+      WHERE pr.group_sub_id = access_instructions.group_sub_id
+      AND pr.user_id = auth.user_id()
+      AND pr.status = 'completed'
+    ) OR
+    auth.role() = 'service_role'
+  );
 
 -- Only group owners and admins can insert access instructions
 CREATE POLICY "Group admins can insert access instructions" ON access_instructions
@@ -201,7 +191,8 @@ CREATE POLICY "Users can view relevant purchase records" ON purchase_records
 CREATE POLICY "Authenticated users can create purchase records" ON purchase_records
   FOR INSERT WITH CHECK (
     auth.role() = 'authenticated' AND
-    user_id = auth.user_id()
+    user_id = auth.user_id() AND
+    (SELECT slots_available FROM group_subs WHERE id = group_sub_id) > 0
   );
 
 -- Users can update their own purchase records
@@ -282,7 +273,8 @@ CREATE POLICY "Users can create ratings for own transactions" ON ratings
       EXISTS (
         SELECT 1 FROM transactions 
         WHERE id = transaction_id AND 
-        (buyer_id = auth.user_id() OR seller_id = auth.user_id())
+        (buyer_id = auth.user_id() OR seller_id = auth.user_id()) AND
+        status = 'completed'
       )
     )
   );
@@ -323,6 +315,10 @@ CREATE POLICY "Service can insert security logs" ON security_logs
 ----------------------
 -- Policy: device_fingerprints
 ----------------------
--- Only service role can access device fingerprints
+-- Users can view their own device fingerprints
+CREATE POLICY "Users can view own device fingerprints" ON device_fingerprints
+  FOR SELECT USING (user_id = auth.user_id());
+
+-- Only service role can manage device fingerprints
 CREATE POLICY "Service can manage device fingerprints" ON device_fingerprints
   FOR ALL USING (auth.role() = 'service_role');

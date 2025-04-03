@@ -21,9 +21,10 @@ CREATE TABLE notifications (
 -- Create messages table for direct communication
 CREATE TABLE messages (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    sender_id UUID NOT NULL REFERENCES user_profiles(id),
-    receiver_id UUID NOT NULL REFERENCES user_profiles(id),
+    sender_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+    receiver_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
     content TEXT NOT NULL,
+    thread_id UUID, -- Dodane później, więc może być NULL dla starszych wiadomości
     is_read BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -47,8 +48,10 @@ CREATE TABLE message_thread_participants (
     PRIMARY KEY (thread_id, user_id)
 );
 
--- Add thread_id to messages
-ALTER TABLE messages ADD COLUMN thread_id UUID REFERENCES message_threads(id) ON DELETE CASCADE;
+-- Dodanie klucza obcego do tabeli messages.thread_id
+ALTER TABLE messages 
+ADD CONSTRAINT fk_messages_thread_id 
+FOREIGN KEY (thread_id) REFERENCES message_threads(id) ON DELETE CASCADE;
 
 --------------------------------
 -- 2. Group Invitation System
@@ -59,7 +62,7 @@ CREATE TABLE group_invitations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     email TEXT NOT NULL,
-    invited_by UUID NOT NULL REFERENCES user_profiles(id),
+    invited_by UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
     role TEXT NOT NULL CHECK (role IN ('admin', 'member')),
     invitation_token TEXT NOT NULL UNIQUE,
     status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected', 'expired')),
@@ -75,15 +78,15 @@ CREATE TABLE group_invitations (
 -- Create disputes table
 CREATE TABLE disputes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    reporter_id UUID NOT NULL REFERENCES user_profiles(id),
+    reporter_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE RESTRICT,
     reported_entity_type TEXT NOT NULL, -- 'user', 'group', 'subscription', 'transaction'
     reported_entity_id UUID NOT NULL,
-    transaction_id UUID REFERENCES transactions(id),
+    transaction_id UUID REFERENCES transactions(id) ON DELETE SET NULL,
     dispute_type TEXT NOT NULL, -- 'payment', 'access', 'quality', 'behavior'
     description TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('open', 'investigating', 'resolved', 'rejected')),
     resolution_note TEXT,
-    resolved_by UUID REFERENCES user_profiles(id),
+    resolved_by UUID REFERENCES user_profiles(id) ON DELETE SET NULL,
     evidence_required BOOLEAN DEFAULT FALSE,
     resolution_deadline TIMESTAMP WITH TIME ZONE,
     refund_amount FLOAT,
@@ -96,7 +99,7 @@ CREATE TABLE disputes (
 CREATE TABLE dispute_comments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     dispute_id UUID NOT NULL REFERENCES disputes(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES user_profiles(id),
+    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
     comment TEXT NOT NULL,
     is_internal BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -106,7 +109,7 @@ CREATE TABLE dispute_comments (
 CREATE TABLE dispute_evidence (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     dispute_id UUID NOT NULL REFERENCES disputes(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES user_profiles(id),
+    user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     description TEXT,
     evidence_type TEXT NOT NULL, -- 'text', 'screenshot', 'document'
@@ -183,6 +186,16 @@ CREATE OR REPLACE FUNCTION create_notification(
 DECLARE
     notification_id UUID;
 BEGIN
+    -- Walidacja parametrów wejściowych
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'User ID cannot be NULL';
+    END IF;
+    
+    IF p_type IS NULL OR p_title IS NULL OR p_content IS NULL THEN
+        RAISE EXCEPTION 'Notification type, title, and content cannot be NULL';
+    END IF;
+    
+    -- Wstawianie powiadomienia
     INSERT INTO notifications (
         user_id,
         type,
@@ -200,8 +213,12 @@ BEGIN
     ) RETURNING id INTO notification_id;
     
     RETURN notification_id;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'Error in create_notification: %', SQLERRM;
+        RETURN NULL; -- Zwracamy NULL zamiast rzucać wyjątek, aby nie przerywać głównej operacji
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Function to create a message thread
 CREATE OR REPLACE FUNCTION create_message_thread(
@@ -214,32 +231,52 @@ DECLARE
     thread_id UUID;
     participant UUID;
 BEGIN
-    -- Create thread
-    INSERT INTO message_threads (
-        title,
-        related_entity_type,
-        related_entity_id
-    ) VALUES (
-        p_title,
-        p_related_entity_type,
-        p_related_entity_id
-    ) RETURNING id INTO thread_id;
+    -- Walidacja parametrów wejściowych
+    IF p_participants IS NULL OR array_length(p_participants, 1) IS NULL THEN
+        RAISE EXCEPTION 'Participants array cannot be NULL or empty';
+    END IF;
     
-    -- Add participants
-    FOREACH participant IN ARRAY p_participants
-    LOOP
-        INSERT INTO message_thread_participants (
-            thread_id,
-            user_id
+    IF p_title IS NULL THEN
+        p_title := 'New conversation';
+    END IF;
+    
+    -- Rozpoczęcie transakcji
+    BEGIN
+        -- Create thread
+        INSERT INTO message_threads (
+            title,
+            related_entity_type,
+            related_entity_id
         ) VALUES (
-            thread_id,
-            participant
-        );
-    END LOOP;
-    
-    RETURN thread_id;
+            p_title,
+            p_related_entity_type,
+            p_related_entity_id
+        ) RETURNING id INTO thread_id;
+        
+        -- Add participants
+        FOREACH participant IN ARRAY p_participants
+        LOOP
+            IF participant IS NULL THEN
+                CONTINUE; -- Pomijamy NULL uczestników
+            END IF;
+            
+            INSERT INTO message_thread_participants (
+                thread_id,
+                user_id
+            ) VALUES (
+                thread_id,
+                participant
+            );
+        END LOOP;
+        
+        RETURN thread_id;
+    EXCEPTION
+        WHEN OTHERS THEN
+            ROLLBACK;
+            RAISE;
+    END;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Function to send a message
 CREATE OR REPLACE FUNCTION send_message(
@@ -252,58 +289,74 @@ DECLARE
     message_id UUID;
     thread_id_local UUID := p_thread_id;
 BEGIN
-    -- If no thread_id is provided, check if a direct thread exists between sender and receiver
-    IF thread_id_local IS NULL THEN
-        SELECT mt.id INTO thread_id_local
-        FROM message_threads mt
-        INNER JOIN message_thread_participants mtp1 ON mt.id = mtp1.thread_id
-        INNER JOIN message_thread_participants mtp2 ON mt.id = mtp2.thread_id
-        WHERE mtp1.user_id = p_sender_id
-          AND mtp2.user_id = p_receiver_id
-          AND mt.related_entity_type IS NULL
-          AND (SELECT COUNT(*) FROM message_thread_participants WHERE thread_id = mt.id) = 2
-        LIMIT 1;
-        
-        -- If no thread exists, create a new one
-        IF thread_id_local IS NULL THEN
-            thread_id_local := create_message_thread(
-                'Direct message',
-                ARRAY[p_sender_id, p_receiver_id]::UUID[]
-            );
-        END IF;
+    -- Walidacja parametrów wejściowych
+    IF p_sender_id IS NULL OR p_receiver_id IS NULL THEN
+        RAISE EXCEPTION 'Sender ID and receiver ID cannot be NULL';
     END IF;
     
-    -- Insert message
-    INSERT INTO messages (
-        sender_id,
-        receiver_id,
-        content,
-        thread_id
-    ) VALUES (
-        p_sender_id,
-        p_receiver_id,
-        p_content,
-        thread_id_local
-    ) RETURNING id INTO message_id;
+    IF p_content IS NULL OR LENGTH(p_content) = 0 THEN
+        RAISE EXCEPTION 'Message content cannot be NULL or empty';
+    END IF;
     
-    -- Update thread's updated_at
-    UPDATE message_threads
-    SET updated_at = CURRENT_TIMESTAMP
-    WHERE id = thread_id_local;
-    
-    -- Create notification for receiver
-    PERFORM create_notification(
-        p_receiver_id,
-        'message',
-        'New message',
-        substring(p_content from 1 for 100) || CASE WHEN length(p_content) > 100 THEN '...' ELSE '' END,
-        'message',
-        message_id
-    );
-    
-    RETURN message_id;
+    -- Rozpoczęcie transakcji
+    BEGIN
+        -- If no thread_id is provided, check if a direct thread exists between sender and receiver
+        IF thread_id_local IS NULL THEN
+            SELECT mt.id INTO thread_id_local
+            FROM message_threads mt
+            INNER JOIN message_thread_participants mtp1 ON mt.id = mtp1.thread_id
+            INNER JOIN message_thread_participants mtp2 ON mt.id = mtp2.thread_id
+            WHERE mtp1.user_id = p_sender_id
+              AND mtp2.user_id = p_receiver_id
+              AND mt.related_entity_type IS NULL
+              AND (SELECT COUNT(*) FROM message_thread_participants WHERE thread_id = mt.id) = 2
+            LIMIT 1;
+            
+            -- If no thread exists, create a new one
+            IF thread_id_local IS NULL THEN
+                thread_id_local := create_message_thread(
+                    'Direct message',
+                    ARRAY[p_sender_id, p_receiver_id]::UUID[]
+                );
+            END IF;
+        END IF;
+        
+        -- Insert message
+        INSERT INTO messages (
+            sender_id,
+            receiver_id,
+            content,
+            thread_id
+        ) VALUES (
+            p_sender_id,
+            p_receiver_id,
+            p_content,
+            thread_id_local
+        ) RETURNING id INTO message_id;
+        
+        -- Update thread's updated_at
+        UPDATE message_threads
+        SET updated_at = CURRENT_TIMESTAMP
+        WHERE id = thread_id_local;
+        
+        -- Create notification for receiver
+        PERFORM create_notification(
+            p_receiver_id,
+            'message',
+            'New message',
+            substring(p_content from 1 for 100) || CASE WHEN length(p_content) > 100 THEN '...' ELSE '' END,
+            'message',
+            message_id
+        );
+        
+        RETURN message_id;
+    EXCEPTION
+        WHEN OTHERS THEN
+            ROLLBACK;
+            RAISE;
+    END;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Function to create group invitation
 CREATE OR REPLACE FUNCTION create_group_invitation(
@@ -318,48 +371,68 @@ DECLARE
     invitation_token TEXT;
     user_id UUID;
 BEGIN
-    -- Generate unique token
-    invitation_token := generate_secure_token();
-    
-    -- Create invitation
-    INSERT INTO group_invitations (
-        group_id,
-        email,
-        invited_by,
-        role,
-        invitation_token,
-        status,
-        expires_at
-    ) VALUES (
-        p_group_id,
-        p_email,
-        p_invited_by,
-        p_role,
-        invitation_token,
-        'pending',
-        CURRENT_TIMESTAMP + (p_expires_in_days || ' days')::INTERVAL
-    ) RETURNING id INTO invitation_id;
-    
-    -- Check if user with this email exists
-    SELECT id INTO user_id
-    FROM user_profiles
-    WHERE email = p_email;
-    
-    -- If user exists, create notification
-    IF user_id IS NOT NULL THEN
-        PERFORM create_notification(
-            user_id,
-            'invitation',
-            'Group invitation',
-            'You have been invited to join a group: ' || (SELECT name FROM groups WHERE id = p_group_id),
-            'group',
-            p_group_id
-        );
+    -- Walidacja parametrów wejściowych
+    IF p_group_id IS NULL OR p_email IS NULL OR p_invited_by IS NULL THEN
+        RAISE EXCEPTION 'Group ID, email, and invited_by user ID cannot be NULL';
     END IF;
     
-    RETURN invitation_id;
+    IF p_role IS NULL OR p_role NOT IN ('admin', 'member') THEN
+        RAISE EXCEPTION 'Role must be either "admin" or "member"';
+    END IF;
+    
+    IF p_expires_in_days IS NULL OR p_expires_in_days <= 0 THEN
+        p_expires_in_days := 7; -- Domyślny czas wygaśnięcia
+    END IF;
+    
+    -- Rozpoczęcie transakcji
+    BEGIN
+        -- Generate unique token
+        invitation_token := generate_secure_token();
+        
+        -- Create invitation
+        INSERT INTO group_invitations (
+            group_id,
+            email,
+            invited_by,
+            role,
+            invitation_token,
+            status,
+            expires_at
+        ) VALUES (
+            p_group_id,
+            p_email,
+            p_invited_by,
+            p_role,
+            invitation_token,
+            'pending',
+            CURRENT_TIMESTAMP + (p_expires_in_days || ' days')::INTERVAL
+        ) RETURNING id INTO invitation_id;
+        
+        -- Check if user with this email exists
+        SELECT id INTO user_id
+        FROM user_profiles
+        WHERE email = p_email;
+        
+        -- If user exists, create notification
+        IF user_id IS NOT NULL THEN
+            PERFORM create_notification(
+                user_id,
+                'invitation',
+                'Group invitation',
+                'You have been invited to join a group: ' || (SELECT name FROM groups WHERE id = p_group_id),
+                'group',
+                p_group_id
+            );
+        END IF;
+        
+        RETURN invitation_id;
+    EXCEPTION
+        WHEN OTHERS THEN
+            ROLLBACK;
+            RAISE;
+    END;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Function to accept invitation
 CREATE OR REPLACE FUNCTION accept_group_invitation(
@@ -369,68 +442,81 @@ CREATE OR REPLACE FUNCTION accept_group_invitation(
 DECLARE
     invitation_record group_invitations%ROWTYPE;
 BEGIN
-    -- Get invitation
-    SELECT * INTO invitation_record
-    FROM group_invitations
-    WHERE invitation_token = p_invitation_token;
-    
-    -- Check if invitation exists
-    IF invitation_record IS NULL THEN
-        RAISE EXCEPTION 'Invalid invitation token';
+    -- Walidacja parametrów wejściowych
+    IF p_invitation_token IS NULL OR p_user_id IS NULL THEN
+        RAISE EXCEPTION 'Invitation token and user ID cannot be NULL';
     END IF;
     
-    -- Check if invitation is expired
-    IF invitation_record.expires_at < CURRENT_TIMESTAMP THEN
+    -- Rozpoczęcie transakcji
+    BEGIN
+        -- Get invitation
+        SELECT * INTO invitation_record
+        FROM group_invitations
+        WHERE invitation_token = p_invitation_token
+        FOR UPDATE; -- Blokujemy wiersz na czas transakcji
+        
+        -- Check if invitation exists
+        IF invitation_record IS NULL THEN
+            RAISE EXCEPTION 'Invalid invitation token';
+        END IF;
+        
+        -- Check if invitation is expired
+        IF invitation_record.expires_at < CURRENT_TIMESTAMP THEN
+            UPDATE group_invitations
+            SET status = 'expired'
+            WHERE id = invitation_record.id;
+            
+            RAISE EXCEPTION 'Invitation has expired';
+        END IF;
+        
+        -- Check if invitation is still pending
+        IF invitation_record.status <> 'pending' THEN
+            RAISE EXCEPTION 'Invitation has already been % ', invitation_record.status;
+        END IF;
+        
+        -- Update invitation status
         UPDATE group_invitations
-        SET status = 'expired'
+        SET 
+            status = 'accepted',
+            updated_at = CURRENT_TIMESTAMP
         WHERE id = invitation_record.id;
         
-        RAISE EXCEPTION 'Invitation has expired';
-    END IF;
-    
-    -- Check if invitation is still pending
-    IF invitation_record.status <> 'pending' THEN
-        RAISE EXCEPTION 'Invitation has already been % ', invitation_record.status;
-    END IF;
-    
-    -- Update invitation status
-    UPDATE group_invitations
-    SET 
-        status = 'accepted',
-        updated_at = CURRENT_TIMESTAMP
-    WHERE id = invitation_record.id;
-    
-    -- Add user to group
-    INSERT INTO group_members (
-        group_id,
-        user_id,
-        role,
-        status,
-        invited_by,
-        joined_at
-    ) VALUES (
-        invitation_record.group_id,
-        p_user_id,
-        invitation_record.role,
-        'active',
-        invitation_record.invited_by,
-        CURRENT_TIMESTAMP
-    );
-    
-    -- Notify the inviter
-    PERFORM create_notification(
-        invitation_record.invited_by,
-        'invitation_accepted',
-        'Invitation accepted',
-        (SELECT display_name FROM user_profiles WHERE id = p_user_id) || ' has accepted your invitation to join ' || 
-        (SELECT name FROM groups WHERE id = invitation_record.group_id),
-        'group',
-        invitation_record.group_id
-    );
-    
-    RETURN TRUE;
+        -- Add user to group
+        INSERT INTO group_members (
+            group_id,
+            user_id,
+            role,
+            status,
+            invited_by,
+            joined_at
+        ) VALUES (
+            invitation_record.group_id,
+            p_user_id,
+            invitation_record.role,
+            'active',
+            invitation_record.invited_by,
+            CURRENT_TIMESTAMP
+        );
+        
+        -- Notify the inviter
+        PERFORM create_notification(
+            invitation_record.invited_by,
+            'invitation_accepted',
+            'Invitation accepted',
+            (SELECT display_name FROM user_profiles WHERE id = p_user_id) || ' has accepted your invitation to join ' || 
+            (SELECT name FROM groups WHERE id = invitation_record.group_id),
+            'group',
+            invitation_record.group_id
+        );
+        
+        RETURN TRUE;
+    EXCEPTION
+        WHEN OTHERS THEN
+            ROLLBACK;
+            RAISE;
+    END;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Function to create a dispute
 CREATE OR REPLACE FUNCTION create_dispute(
@@ -445,56 +531,72 @@ DECLARE
     dispute_id UUID;
     admin_ids UUID[];
 BEGIN
-    -- Create dispute
-    INSERT INTO disputes (
-        reporter_id,
-        reported_entity_type,
-        reported_entity_id,
-        transaction_id,
-        dispute_type,
-        description,
-        status
-    ) VALUES (
-        p_reporter_id,
-        p_reported_entity_type,
-        p_reported_entity_id,
-        p_transaction_id,
-        p_dispute_type,
-        p_description,
-        'open'
-    ) RETURNING id INTO dispute_id;
-    
-    -- Notify admins (in real implementation, you'd notify system admins)
-    -- For MVP, we'll notify group admins if dispute is about a group or subscription
-    IF p_reported_entity_type = 'group' THEN
-        SELECT array_agg(user_id) INTO admin_ids
-        FROM group_members
-        WHERE group_id = p_reported_entity_id AND role = 'admin';
-    ELSIF p_reported_entity_type = 'subscription' THEN
-        SELECT array_agg(gm.user_id) INTO admin_ids
-        FROM group_members gm
-        JOIN group_subs gs ON gm.group_id = gs.group_id
-        WHERE gs.id = p_reported_entity_id AND gm.role = 'admin';
+    -- Walidacja parametrów wejściowych
+    IF p_reporter_id IS NULL OR p_reported_entity_type IS NULL OR p_reported_entity_id IS NULL THEN
+        RAISE EXCEPTION 'Reporter ID, reported entity type, and reported entity ID cannot be NULL';
     END IF;
     
-    -- If we have admins to notify
-    IF admin_ids IS NOT NULL THEN
-        FOR i IN 1..array_length(admin_ids, 1)
-        LOOP
-            PERFORM create_notification(
-                admin_ids[i],
-                'dispute',
-                'New dispute reported',
-                'A new dispute has been reported: ' || p_dispute_type,
-                'dispute',
-                dispute_id
-            );
-        END LOOP;
+    IF p_dispute_type IS NULL OR p_description IS NULL THEN
+        RAISE EXCEPTION 'Dispute type and description cannot be NULL';
     END IF;
     
-    RETURN dispute_id;
+    -- Rozpoczęcie transakcji
+    BEGIN
+        -- Create dispute
+        INSERT INTO disputes (
+            reporter_id,
+            reported_entity_type,
+            reported_entity_id,
+            transaction_id,
+            dispute_type,
+            description,
+            status
+        ) VALUES (
+            p_reporter_id,
+            p_reported_entity_type,
+            p_reported_entity_id,
+            p_transaction_id,
+            p_dispute_type,
+            p_description,
+            'open'
+        ) RETURNING id INTO dispute_id;
+        
+        -- Notify admins (in real implementation, you'd notify system admins)
+        -- For MVP, we'll notify group admins if dispute is about a group or subscription
+        IF p_reported_entity_type = 'group' THEN
+            SELECT array_agg(user_id) INTO admin_ids
+            FROM group_members
+            WHERE group_id = p_reported_entity_id AND role = 'admin';
+        ELSIF p_reported_entity_type = 'subscription' THEN
+            SELECT array_agg(gm.user_id) INTO admin_ids
+            FROM group_members gm
+            JOIN group_subs gs ON gm.group_id = gs.group_id
+            WHERE gs.id = p_reported_entity_id AND gm.role = 'admin';
+        END IF;
+        
+        -- If we have admins to notify
+        IF admin_ids IS NOT NULL THEN
+            FOR i IN 1..array_length(admin_ids, 1)
+            LOOP
+                PERFORM create_notification(
+                    admin_ids[i],
+                    'dispute',
+                    'New dispute reported',
+                    'A new dispute has been reported: ' || p_dispute_type,
+                    'dispute',
+                    dispute_id
+                );
+            END LOOP;
+        END IF;
+        
+        RETURN dispute_id;
+    EXCEPTION
+        WHEN OTHERS THEN
+            ROLLBACK;
+            RAISE;
+    END;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Function to add comment to dispute
 CREATE OR REPLACE FUNCTION add_dispute_comment(
@@ -507,44 +609,56 @@ DECLARE
     comment_id UUID;
     dispute_record disputes%ROWTYPE;
 BEGIN
-    -- Get dispute
-    SELECT * INTO dispute_record
-    FROM disputes
-    WHERE id = p_dispute_id;
-    
-    -- Check if dispute exists
-    IF dispute_record IS NULL THEN
-        RAISE EXCEPTION 'Dispute not found';
+    -- Walidacja parametrów wejściowych
+    IF p_dispute_id IS NULL OR p_user_id IS NULL OR p_comment IS NULL THEN
+        RAISE EXCEPTION 'Dispute ID, user ID, and comment cannot be NULL';
     END IF;
     
-    -- Add comment
-    INSERT INTO dispute_comments (
-        dispute_id,
-        user_id,
-        comment,
-        is_internal
-    ) VALUES (
-        p_dispute_id,
-        p_user_id,
-        p_comment,
-        p_is_internal
-    ) RETURNING id INTO comment_id;
-    
-    -- Notify reporter if comment is from someone else
-    IF p_user_id <> dispute_record.reporter_id AND NOT p_is_internal THEN
-        PERFORM create_notification(
-            dispute_record.reporter_id,
-            'dispute_comment',
-            'New comment on your dispute',
-            'Someone has commented on your dispute',
-            'dispute',
-            p_dispute_id
-        );
-    END IF;
-    
-    RETURN comment_id;
+    -- Rozpoczęcie transakcji
+    BEGIN
+        -- Get dispute
+        SELECT * INTO dispute_record
+        FROM disputes
+        WHERE id = p_dispute_id;
+        
+        -- Check if dispute exists
+        IF dispute_record IS NULL THEN
+            RAISE EXCEPTION 'Dispute not found';
+        END IF;
+        
+        -- Add comment
+        INSERT INTO dispute_comments (
+            dispute_id,
+            user_id,
+            comment,
+            is_internal
+        ) VALUES (
+            p_dispute_id,
+            p_user_id,
+            p_comment,
+            p_is_internal
+        ) RETURNING id INTO comment_id;
+        
+        -- Notify reporter if comment is from someone else
+        IF p_user_id <> dispute_record.reporter_id AND NOT p_is_internal THEN
+            PERFORM create_notification(
+                dispute_record.reporter_id,
+                'dispute_comment',
+                'New comment on your dispute',
+                'Someone has commented on your dispute',
+                'dispute',
+                p_dispute_id
+            );
+        END IF;
+        
+        RETURN comment_id;
+    EXCEPTION
+        WHEN OTHERS THEN
+            ROLLBACK;
+            RAISE;
+    END;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Function to resolve dispute
 CREATE OR REPLACE FUNCTION resolve_dispute(
@@ -556,38 +670,55 @@ CREATE OR REPLACE FUNCTION resolve_dispute(
 DECLARE
     dispute_record disputes%ROWTYPE;
 BEGIN
-    -- Get dispute
-    SELECT * INTO dispute_record
-    FROM disputes
-    WHERE id = p_dispute_id;
-    
-    -- Check if dispute exists
-    IF dispute_record IS NULL THEN
-        RAISE EXCEPTION 'Dispute not found';
+    -- Walidacja parametrów wejściowych
+    IF p_dispute_id IS NULL OR p_resolver_id IS NULL OR p_status IS NULL THEN
+        RAISE EXCEPTION 'Dispute ID, resolver ID, and status cannot be NULL';
     END IF;
     
-    -- Update dispute
-    UPDATE disputes
-    SET 
-        status = p_status,
-        resolution_note = p_resolution_note,
-        resolved_by = p_resolver_id,
-        updated_at = CURRENT_TIMESTAMP
-    WHERE id = p_dispute_id;
+    IF p_status NOT IN ('investigating', 'resolved', 'rejected') THEN
+        RAISE EXCEPTION 'Status must be one of: investigating, resolved, rejected';
+    END IF;
     
-    -- Notify reporter
-    PERFORM create_notification(
-        dispute_record.reporter_id,
-        'dispute_resolved',
-        'Your dispute has been resolved',
-        'Your dispute has been marked as ' || p_status,
-        'dispute',
-        p_dispute_id
-    );
-    
-    RETURN TRUE;
+    -- Rozpoczęcie transakcji
+    BEGIN
+        -- Get dispute
+        SELECT * INTO dispute_record
+        FROM disputes
+        WHERE id = p_dispute_id
+        FOR UPDATE;
+        
+        -- Check if dispute exists
+        IF dispute_record IS NULL THEN
+            RAISE EXCEPTION 'Dispute not found';
+        END IF;
+        
+        -- Update dispute
+        UPDATE disputes
+        SET 
+            status = p_status,
+            resolution_note = p_resolution_note,
+            resolved_by = p_resolver_id,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = p_dispute_id;
+        
+        -- Notify reporter
+        PERFORM create_notification(
+            dispute_record.reporter_id,
+            'dispute_resolved',
+            'Your dispute has been resolved',
+            'Your dispute has been marked as ' || p_status,
+            'dispute',
+            p_dispute_id
+        );
+        
+        RETURN TRUE;
+    EXCEPTION
+        WHEN OTHERS THEN
+            ROLLBACK;
+            RAISE;
+    END;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 --------------------------------
 -- Set up RLS policies
@@ -606,6 +737,10 @@ ALTER TABLE dispute_evidence ENABLE ROW LEVEL SECURITY;
 -- Notifications policies
 CREATE POLICY "Users can view own notifications" ON notifications
   FOR SELECT USING (user_id = auth.user_id());
+
+CREATE POLICY "Users can mark own notifications as read" ON notifications
+  FOR UPDATE USING (user_id = auth.user_id())
+  WITH CHECK (user_id = auth.user_id() AND (xmax::text = xmin::text OR is_read IS DISTINCT FROM OLD.is_read));
 
 -- Messages policies
 CREATE POLICY "Users can view messages they sent or received" ON messages
@@ -736,6 +871,10 @@ BEGIN
   END IF;
   
   RETURN NEW;
+EXCEPTION
+  WHEN OTHERS THEN
+    RAISE NOTICE 'Error in notify_purchase_record_status_change: %', SQLERRM;
+    RETURN NEW; -- Zapewniamy, że błąd w powiadomieniach nie blokuje głównej operacji
 END;
 $$ LANGUAGE plpgsql;
 
@@ -784,6 +923,10 @@ BEGIN
   END IF;
   
   RETURN NEW;
+EXCEPTION
+  WHEN OTHERS THEN
+    RAISE NOTICE 'Error in notify_payment_status_change: %', SQLERRM;
+    RETURN NEW; -- Zapewniamy, że błąd w powiadomieniach nie blokuje głównej operacji
 END;
 $$ LANGUAGE plpgsql;
 
