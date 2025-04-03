@@ -1,20 +1,5 @@
--- Row Level Security Policies for GroupShare
--- This script sets up RLS policies to secure data access
-
--- Enable RLS on all tables
-ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE groups ENABLE ROW LEVEL SECURITY;
-ALTER TABLE group_members ENABLE ROW LEVEL SECURITY;
-ALTER TABLE subscription_platforms ENABLE ROW LEVEL SECURITY;
-ALTER TABLE group_subs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE access_instructions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE applications ENABLE ROW LEVEL SECURITY;
-ALTER TABLE access_tokens ENABLE ROW LEVEL SECURITY;
-ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE ratings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE encryption_keys ENABLE ROW LEVEL SECURITY;
-ALTER TABLE security_logs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE device_fingerprints ENABLE ROW LEVEL SECURITY;
+-- Functions for GroupShare
+-- This script creates utility functions for the application
 
 -- Create a function to get the current authenticated user ID
 CREATE OR REPLACE FUNCTION auth.user_id() RETURNS UUID AS $$
@@ -45,275 +30,280 @@ CREATE OR REPLACE FUNCTION is_group_owner(group_id UUID, user_id UUID) RETURNS B
   );
 $$ LANGUAGE SQL SECURITY DEFINER;
 
-----------------------
--- Policy: user_profiles
-----------------------
--- Anyone can see basic user profile information
-CREATE POLICY "Public users can view profiles" ON user_profiles
-  FOR SELECT USING (true);
+-- Create function to generate a secure token
+CREATE OR REPLACE FUNCTION generate_secure_token() RETURNS TEXT AS $$
+DECLARE
+  token TEXT;
+BEGIN
+  token := encode(gen_random_bytes(32), 'hex');
+  RETURN token;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Users can update only their own profiles
-CREATE POLICY "Users can update own profile" ON user_profiles
-  FOR UPDATE USING (id = auth.user_id());
+-- Create a function to calculate ratings for a user
+CREATE OR REPLACE FUNCTION calculate_user_ratings(user_id UUID) RETURNS VOID AS $$
+DECLARE
+  avg_rating FLOAT;
+  rating_count INTEGER;
+BEGIN
+  SELECT 
+    AVG((access_quality + communication + reliability) / 3.0),
+    COUNT(*)
+  INTO
+    avg_rating,
+    rating_count
+  FROM ratings
+  WHERE rated_id = user_id;
+  
+  UPDATE user_profiles
+  SET 
+    rating_avg = COALESCE(avg_rating, 0),
+    rating_count = COALESCE(rating_count, 0)
+  WHERE id = user_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Only backend service can insert new profiles (handled by auth hook)
-CREATE POLICY "Service can insert profiles" ON user_profiles
-  FOR INSERT WITH CHECK (auth.role() = 'service_role');
+-- IMPORTANT: Drop existing transaction functions first to avoid parameter conflicts
+DROP FUNCTION IF EXISTS create_transaction(UUID, UUID, UUID, UUID, FLOAT, FLOAT, TEXT, TEXT, TEXT);
+DROP FUNCTION IF EXISTS complete_transaction(UUID, TEXT);
 
-----------------------
--- Policy: groups
-----------------------
--- Anyone can see groups
-CREATE POLICY "Public users can view groups" ON groups
-  FOR SELECT USING (true);
+-- Create a function to create a transaction
+CREATE OR REPLACE FUNCTION create_transaction(
+    p_buyer_id UUID,
+    p_seller_id UUID,
+    p_group_sub_id UUID,
+    p_purchase_record_id UUID,
+    p_amount FLOAT,
+    p_platform_fee_percent FLOAT,
+    p_payment_method TEXT,
+    p_payment_provider TEXT,
+    p_payment_id TEXT
+) RETURNS UUID AS $$
+DECLARE
+    transaction_id UUID;
+    platform_fee FLOAT;
+    seller_amount FLOAT;
+BEGIN
+    -- Calculate fees
+    platform_fee := p_amount * p_platform_fee_percent;
+    seller_amount := p_amount - platform_fee;
+    
+    -- Create transaction
+    INSERT INTO transactions (
+        buyer_id,
+        seller_id,
+        group_sub_id,
+        purchase_record_id,
+        amount,
+        platform_fee,
+        seller_amount,
+        payment_method,
+        payment_provider,
+        payment_id,
+        status
+    ) VALUES (
+        p_buyer_id,
+        p_seller_id,
+        p_group_sub_id,
+        p_purchase_record_id,
+        p_amount,
+        platform_fee,
+        seller_amount,
+        p_payment_method,
+        p_payment_provider,
+        p_payment_id,
+        'pending'
+    ) RETURNING id INTO transaction_id;
+    
+    RETURN transaction_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Only authenticated users can create groups
-CREATE POLICY "Authenticated users can create groups" ON groups
-  FOR INSERT WITH CHECK (auth.role() = 'authenticated');
+-- Create a function to complete a transaction
+CREATE OR REPLACE FUNCTION complete_transaction(
+    p_transaction_id UUID,
+    p_status TEXT
+) RETURNS BOOLEAN AS $$
+DECLARE
+    v_purchase_record_id UUID;  -- Używamy prefiksu v_ dla zmiennych
+BEGIN
+    -- Get purchase record ID
+    SELECT purchase_record_id INTO v_purchase_record_id
+    FROM transactions
+    WHERE id = p_transaction_id;
+    
+    -- Update transaction
+    UPDATE transactions
+    SET 
+        status = p_status,
+        completed_at = CASE WHEN p_status = 'completed' THEN CURRENT_TIMESTAMP ELSE NULL END,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = p_transaction_id;
+    
+    -- If completed, update purchase record
+    IF p_status = 'completed' THEN
+        UPDATE purchase_records
+        SET 
+            status = 'completed',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = v_purchase_record_id;
+    ELSIF p_status = 'failed' THEN
+        UPDATE purchase_records
+        SET 
+            status = 'failed',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = v_purchase_record_id;
+    ELSIF p_status = 'refunded' THEN
+        UPDATE purchase_records
+        SET 
+            status = 'refunded',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = v_purchase_record_id;
+    END IF;
+    
+    RETURN TRUE;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Only group owners can update groups
-CREATE POLICY "Group owners can update groups" ON groups
-  FOR UPDATE USING (owner_id = auth.user_id());
+-- Create a function to check if slots are available in a group subscription
+CREATE OR REPLACE FUNCTION check_slots_available(
+    p_group_sub_id UUID
+) RETURNS BOOLEAN AS $$
+DECLARE
+    available_slots INTEGER;
+BEGIN
+    SELECT slots_available INTO available_slots
+    FROM group_subs
+    WHERE id = p_group_sub_id;
+    
+    RETURN available_slots > 0;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Only group owners can delete groups
-CREATE POLICY "Group owners can delete groups" ON groups
-  FOR DELETE USING (owner_id = auth.user_id());
+-- Create a function to update available slots when a purchase is completed
+CREATE OR REPLACE FUNCTION update_group_sub_slots() RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.status = 'completed' AND OLD.status <> 'completed' THEN
+        -- Decrement available slots
+        UPDATE group_subs
+        SET 
+            slots_available = slots_available - 1,
+            status = CASE 
+                WHEN slots_available - 1 <= 0 THEN 'full'
+                ELSE status
+            END
+        WHERE id = NEW.group_sub_id;
+    ELSIF OLD.status = 'completed' AND NEW.status <> 'completed' THEN
+        -- Increment available slots if purchase is cancelled/refunded
+        UPDATE group_subs
+        SET 
+            slots_available = slots_available + 1,
+            status = CASE 
+                WHEN status = 'full' AND slots_available + 1 > 0 THEN 'active'
+                ELSE status
+            END
+        WHERE id = NEW.group_sub_id;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
-----------------------
--- Policy: group_members
-----------------------
--- Users can see members of groups they belong to
-CREATE POLICY "Users can view members of their groups" ON group_members
-  FOR SELECT USING (
-    is_group_member(group_id, auth.user_id()) OR 
-    is_group_owner(group_id, auth.user_id())
-  );
+-- Create trigger to update available slots
+CREATE TRIGGER update_slots_on_purchase_status_change
+AFTER UPDATE OF status ON purchase_records
+FOR EACH ROW
+EXECUTE FUNCTION update_group_sub_slots();
 
--- Group owners and admins can add members
-CREATE POLICY "Group admins can add members" ON group_members
-  FOR INSERT WITH CHECK (
-    is_group_admin(group_id, auth.user_id()) OR 
-    is_group_owner(group_id, auth.user_id())
-  );
+-- Create a function to check if a user can access a subscription
+CREATE OR REPLACE FUNCTION can_access_subscription(
+    p_user_id UUID,
+    p_group_sub_id UUID
+) RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN EXISTS (
+        SELECT 1 
+        FROM purchase_records 
+        WHERE user_id = p_user_id 
+        AND group_sub_id = p_group_sub_id 
+        AND status = 'completed'
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Group owners and admins can update members
-CREATE POLICY "Group admins can update members" ON group_members
-  FOR UPDATE USING (
-    is_group_admin(group_id, auth.user_id()) OR 
-    is_group_owner(group_id, auth.user_id())
-  );
+-- Create a function to log security events
+CREATE OR REPLACE FUNCTION log_security_event(
+    p_user_id UUID,
+    p_action_type TEXT,
+    p_resource_type TEXT,
+    p_resource_id TEXT,
+    p_status TEXT,
+    p_ip_address TEXT DEFAULT NULL,
+    p_user_agent TEXT DEFAULT NULL,
+    p_details JSONB DEFAULT '{}'::jsonb
+) RETURNS UUID AS $$
+DECLARE
+    log_id UUID;
+BEGIN
+    INSERT INTO security_logs (
+        user_id,
+        action_type,
+        resource_type,
+        resource_id,
+        status,
+        ip_address,
+        user_agent,
+        details
+    ) VALUES (
+        p_user_id,
+        p_action_type,
+        p_resource_type,
+        p_resource_id,
+        p_status,
+        p_ip_address,
+        p_user_agent,
+        p_details
+    ) RETURNING id INTO log_id;
+    
+    RETURN log_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Group owners and admins can delete members
-CREATE POLICY "Group admins can delete members" ON group_members
-  FOR DELETE USING (
-    is_group_admin(group_id, auth.user_id()) OR 
-    is_group_owner(group_id, auth.user_id())
-  );
-
-----------------------
--- Policy: subscription_platforms
-----------------------
--- Anyone can see platform information
-CREATE POLICY "Public users can view platforms" ON subscription_platforms
-  FOR SELECT USING (active = true);
-
--- Only service role can modify platforms
-CREATE POLICY "Service can modify platforms" ON subscription_platforms
-  FOR ALL USING (auth.role() = 'service_role');
-
-----------------------
--- Policy: group_subs
-----------------------
--- Anyone can see active subscription offers
-CREATE POLICY "Public users can view active subscription offers" ON group_subs
-  FOR SELECT USING (status = 'active');
-
--- Group owners and admins can manage subscription offers
-CREATE POLICY "Group admins can manage subscription offers" ON group_subs
-  FOR ALL USING (
-    is_group_admin((SELECT group_id FROM group_subs WHERE id = group_subs.id), auth.user_id()) OR
-    is_group_owner((SELECT group_id FROM group_subs WHERE id = group_subs.id), auth.user_id())
-  );
-
-----------------------
--- Policy: access_instructions
-----------------------
--- IMPORTANT: access_instructions contains sensitive data and should have very strict policies
-
--- NO SELECT policy for access_instructions - data should only be accessed via API with proper encryption handling
--- Only service role can read access instructions directly
-CREATE POLICY "Service can read access instructions" ON access_instructions
-  FOR SELECT USING (auth.role() = 'service_role');
-
--- Only group owners and admins can insert access instructions
-CREATE POLICY "Group admins can insert access instructions" ON access_instructions
-  FOR INSERT WITH CHECK (
-    is_group_admin(
-      (SELECT group_id FROM group_subs WHERE id = group_sub_id), 
-      auth.user_id()
-    ) OR
-    is_group_owner(
-      (SELECT group_id FROM group_subs WHERE id = group_sub_id), 
-      auth.user_id()
-    )
-  );
-
--- Only group owners and admins can update access instructions
-CREATE POLICY "Group admins can update access instructions" ON access_instructions
-  FOR UPDATE USING (
-    is_group_admin(
-      (SELECT group_id FROM group_subs WHERE id = group_sub_id), 
-      auth.user_id()
-    ) OR
-    is_group_owner(
-      (SELECT group_id FROM group_subs WHERE id = group_sub_id), 
-      auth.user_id()
-    )
-  );
-
-----------------------
--- Policy: applications
-----------------------
--- Users can see applications they created or applications for subscriptions they manage
-CREATE POLICY "Users can view relevant applications" ON applications
-  FOR SELECT USING (
-    user_id = auth.user_id() OR
-    is_group_admin(
-      (SELECT group_id FROM group_subs WHERE id = group_sub_id), 
-      auth.user_id()
-    ) OR
-    is_group_owner(
-      (SELECT group_id FROM group_subs WHERE id = group_sub_id), 
-      auth.user_id()
-    )
-  );
-
--- Authenticated users can create applications
-CREATE POLICY "Authenticated users can create applications" ON applications
-  FOR INSERT WITH CHECK (
-    auth.role() = 'authenticated' AND
-    user_id = auth.user_id()
-  );
-
--- Users can update their own applications
-CREATE POLICY "Users can update own applications" ON applications
-  FOR UPDATE USING (
-    user_id = auth.user_id()
-  );
-
--- Group admins can update applications for their subscriptions
-CREATE POLICY "Group admins can update applications" ON applications
-  FOR UPDATE USING (
-    is_group_admin(
-      (SELECT group_id FROM group_subs WHERE id = group_sub_id), 
-      auth.user_id()
-    ) OR
-    is_group_owner(
-      (SELECT group_id FROM group_subs WHERE id = group_sub_id), 
-      auth.user_id()
-    )
-  );
-
-----------------------
--- Policy: access_tokens
-----------------------
--- Only token owners can view their tokens
-CREATE POLICY "Users can view own tokens" ON access_tokens
-  FOR SELECT USING (
-    (SELECT user_id FROM applications WHERE id = application_id) = auth.user_id()
-  );
-
--- Only service role can create tokens
-CREATE POLICY "Service can create tokens" ON access_tokens
-  FOR INSERT WITH CHECK (
-    auth.role() = 'service_role'
-  );
-
--- Service role and token owners can update tokens
-CREATE POLICY "Service and users can update tokens" ON access_tokens
-  FOR UPDATE USING (
-    auth.role() = 'service_role' OR
-    (SELECT user_id FROM applications WHERE id = application_id) = auth.user_id()
-  );
-
-----------------------
--- Policy: transactions
-----------------------
--- Users can see transactions they're involved in
-CREATE POLICY "Users can view own transactions" ON transactions
-  FOR SELECT USING (
-    buyer_id = auth.user_id() OR
-    seller_id = auth.user_id()
-  );
-
--- Only service role can create transactions
-CREATE POLICY "Service can create transactions" ON transactions
-  FOR INSERT WITH CHECK (
-    auth.role() = 'service_role'
-  );
-
--- Only service role can update transactions
-CREATE POLICY "Service can update transactions" ON transactions
-  FOR UPDATE USING (
-    auth.role() = 'service_role'
-  );
-
-----------------------
--- Policy: ratings
-----------------------
--- Anyone can see ratings
-CREATE POLICY "Public users can view ratings" ON ratings
-  FOR SELECT USING (true);
-
--- Users can create ratings for transactions they're involved in
-CREATE POLICY "Users can create ratings for own transactions" ON ratings
-  FOR INSERT WITH CHECK (
-    rater_id = auth.user_id() AND
-    (
-      EXISTS (
-        SELECT 1 FROM transactions 
-        WHERE id = transaction_id AND 
-        (buyer_id = auth.user_id() OR seller_id = auth.user_id())
-      )
-    )
-  );
-
--- Users can update their own ratings
-CREATE POLICY "Users can update own ratings" ON ratings
-  FOR UPDATE USING (
-    rater_id = auth.user_id()
-  );
-
--- Users can delete their own ratings
-CREATE POLICY "Users can delete own ratings" ON ratings
-  FOR DELETE USING (
-    rater_id = auth.user_id()
-  );
-
-----------------------
--- Policy: encryption_keys
-----------------------
--- Only service role can access encryption keys
-CREATE POLICY "Service can manage encryption keys" ON encryption_keys
-  FOR ALL USING (auth.role() = 'service_role');
-
-----------------------
--- Policy: security_logs
-----------------------
--- Users can see their own security logs
-CREATE POLICY "Users can view own security logs" ON security_logs
-  FOR SELECT USING (user_id = auth.user_id());
-
--- Only service role can insert security logs
-CREATE POLICY "Service can insert security logs" ON security_logs
-  FOR INSERT WITH CHECK (auth.role() = 'service_role');
-
--- No one can update or delete security logs (immutable audit trail)
--- These policies are intentionally omitted
-
-----------------------
--- Policy: device_fingerprints
-----------------------
--- Only service role can access device fingerprints
-CREATE POLICY "Service can manage device fingerprints" ON device_fingerprints
-  FOR ALL USING (auth.role() = 'service_role');
+-- Create a function to track device fingerprints
+CREATE OR REPLACE FUNCTION track_device_fingerprint(
+    p_user_id UUID,
+    p_fingerprint TEXT
+) RETURNS UUID AS $$
+DECLARE
+    device_id UUID;
+BEGIN
+    -- Check if fingerprint already exists for this user
+    SELECT id INTO device_id
+    FROM device_fingerprints
+    WHERE user_id = p_user_id AND fingerprint = p_fingerprint;
+    
+    IF device_id IS NULL THEN
+        -- Insert new fingerprint
+        INSERT INTO device_fingerprints (
+            user_id,
+            fingerprint,
+            first_seen_at,
+            last_seen_at
+        ) VALUES (
+            p_user_id,
+            p_fingerprint,
+            CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP
+        ) RETURNING id INTO device_id;
+    ELSE
+        -- Update existing fingerprint
+        UPDATE device_fingerprints
+        SET 
+            last_seen_at = CURRENT_TIMESTAMP,
+            counter = counter + 1
+        WHERE id = device_id;
+    END IF;
+    
+    RETURN device_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;

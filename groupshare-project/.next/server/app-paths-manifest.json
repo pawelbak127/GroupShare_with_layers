@@ -1,11 +1,11 @@
 {
   "/_not-found/page": "app/_not-found/page.js",
-  "/about/page": "app/about/page.js",
-  "/sign-in/page": "app/sign-in/page.js",
-  "/sign-up/page": "app/sign-up/page.js",
-  "/dashboard/page": "app/dashboard/page.js",
-  "/api/applications/route": "app/api/applications/route.js",
+  "/page": "app/page.js",
   "/offers/page": "app/offers/page.js",
   "/api/offers/route": "app/api/offers/route.js",
-  "/page": "app/page.js"
+  "/dashboard/page": "app/dashboard/page.js",
+  "/how-it-works/page": "app/how-it-works/page.js",
+  "/sign-in/page": "app/sign-in/page.js",
+  "/api/offers/[id]/purchase/route": "app/api/offers/[id]/purchase/route.js",
+  "/api/applications/route": "app/api/applications/route.js"
 }

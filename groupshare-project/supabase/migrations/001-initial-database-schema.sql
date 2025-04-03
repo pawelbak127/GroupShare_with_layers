@@ -11,7 +11,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- DROP TABLE IF EXISTS ratings;
 -- DROP TABLE IF EXISTS access_tokens;
 -- DROP TABLE IF EXISTS transactions;
--- DROP TABLE IF EXISTS applications;
+-- DROP TABLE IF EXISTS purchase_records;
 -- DROP TABLE IF EXISTS access_instructions;
 -- DROP TABLE IF EXISTS encryption_keys;
 -- DROP TABLE IF EXISTS group_subs;
@@ -146,13 +146,12 @@ CREATE TABLE access_instructions (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Create applications table
-CREATE TABLE applications (
+-- Create purchase_records table (replacing applications)
+CREATE TABLE purchase_records (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
     group_sub_id UUID NOT NULL REFERENCES group_subs(id) ON DELETE CASCADE,
-    message TEXT,
-    status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected', 'completed', 'problem', 'cancelled')),
+    status TEXT NOT NULL CHECK (status IN ('pending_payment', 'payment_processing', 'completed', 'failed', 'refunded')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     access_provided BOOLEAN DEFAULT FALSE,
@@ -164,7 +163,7 @@ CREATE TABLE applications (
 -- Create access tokens table
 CREATE TABLE access_tokens (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    application_id UUID NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    purchase_record_id UUID NOT NULL REFERENCES purchase_records(id) ON DELETE CASCADE,
     token_hash TEXT NOT NULL UNIQUE,
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     used BOOLEAN DEFAULT FALSE,
@@ -180,7 +179,7 @@ CREATE TABLE transactions (
     buyer_id UUID NOT NULL REFERENCES user_profiles(id),
     seller_id UUID NOT NULL REFERENCES user_profiles(id),
     group_sub_id UUID NOT NULL REFERENCES group_subs(id),
-    application_id UUID NOT NULL REFERENCES applications(id),
+    purchase_record_id UUID NOT NULL REFERENCES purchase_records(id),
     amount FLOAT NOT NULL,
     platform_fee FLOAT NOT NULL,
     seller_amount FLOAT NOT NULL,
@@ -218,14 +217,14 @@ CREATE INDEX idx_group_subs_group_id ON group_subs(group_id);
 CREATE INDEX idx_group_subs_platform_id ON group_subs(platform_id);
 CREATE INDEX idx_group_subs_status ON group_subs(status);
 CREATE INDEX idx_access_instructions_group_sub_id ON access_instructions(group_sub_id);
-CREATE INDEX idx_applications_user_id ON applications(user_id);
-CREATE INDEX idx_applications_group_sub_id ON applications(group_sub_id);
-CREATE INDEX idx_applications_status ON applications(status);
-CREATE INDEX idx_access_tokens_application_id ON access_tokens(application_id);
+CREATE INDEX idx_purchase_records_user_id ON purchase_records(user_id);
+CREATE INDEX idx_purchase_records_group_sub_id ON purchase_records(group_sub_id);
+CREATE INDEX idx_purchase_records_status ON purchase_records(status);
+CREATE INDEX idx_access_tokens_purchase_record_id ON access_tokens(purchase_record_id);
 CREATE INDEX idx_access_tokens_token_hash ON access_tokens(token_hash);
 CREATE INDEX idx_transactions_buyer_id ON transactions(buyer_id);
 CREATE INDEX idx_transactions_seller_id ON transactions(seller_id);
-CREATE INDEX idx_transactions_application_id ON transactions(application_id);
+CREATE INDEX idx_transactions_purchase_record_id ON transactions(purchase_record_id);
 CREATE INDEX idx_transactions_status ON transactions(status);
 CREATE INDEX idx_ratings_rater_id ON ratings(rater_id);
 CREATE INDEX idx_ratings_rated_id ON ratings(rated_id);
@@ -240,8 +239,8 @@ CREATE INDEX idx_device_fingerprints_fingerprint ON device_fingerprints(fingerpr
 
 -- Compound indexes for common query patterns
 CREATE INDEX idx_group_members_group_user ON group_members(group_id, user_id);
-CREATE INDEX idx_applications_user_status ON applications(user_id, status);
-CREATE INDEX idx_applications_group_sub_status ON applications(group_sub_id, status);
+CREATE INDEX idx_purchase_records_user_status ON purchase_records(user_id, status);
+CREATE INDEX idx_purchase_records_group_sub_status ON purchase_records(group_sub_id, status);
 CREATE INDEX idx_transactions_buyer_status ON transactions(buyer_id, status);
 CREATE INDEX idx_transactions_seller_status ON transactions(seller_id, status);
 CREATE INDEX idx_security_logs_user_action ON security_logs(user_id, action_type);
@@ -271,8 +270,8 @@ CREATE TRIGGER update_access_instructions_updated_at
 BEFORE UPDATE ON access_instructions
 FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
-CREATE TRIGGER update_applications_updated_at
-BEFORE UPDATE ON applications
+CREATE TRIGGER update_purchase_records_updated_at
+BEFORE UPDATE ON purchase_records
 FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 
 CREATE TRIGGER update_transactions_updated_at

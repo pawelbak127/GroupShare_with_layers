@@ -9,10 +9,10 @@
 CREATE TABLE notifications (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
-    type TEXT NOT NULL, -- 'payment', 'invitation', 'access', 'application', 'dispute'
+    type TEXT NOT NULL, -- 'payment', 'invitation', 'access', 'purchase', 'dispute'
     title TEXT NOT NULL,
     content TEXT NOT NULL,
-    related_entity_type TEXT, -- 'group', 'application', 'transaction', 'dispute'
+    related_entity_type TEXT, -- 'group', 'purchase_record', 'transaction', 'dispute'
     related_entity_id UUID,
     is_read BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -32,7 +32,7 @@ CREATE TABLE messages (
 CREATE TABLE message_threads (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     title TEXT,
-    related_entity_type TEXT, -- 'group', 'subscription', 'application'
+    related_entity_type TEXT, -- 'group', 'subscription', 'purchase_record'
     related_entity_id UUID,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -84,6 +84,10 @@ CREATE TABLE disputes (
     status TEXT NOT NULL CHECK (status IN ('open', 'investigating', 'resolved', 'rejected')),
     resolution_note TEXT,
     resolved_by UUID REFERENCES user_profiles(id),
+    evidence_required BOOLEAN DEFAULT FALSE,
+    resolution_deadline TIMESTAMP WITH TIME ZONE,
+    refund_amount FLOAT,
+    refund_status TEXT CHECK (refund_status IN ('pending', 'processing', 'completed', 'rejected')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -679,42 +683,53 @@ CREATE POLICY "Users can add comments to disputes" ON dispute_comments
     user_id = auth.user_id()
   );
 
--- Create triggers for notifications on application status changes
-CREATE OR REPLACE FUNCTION notify_application_status_change()
+-- Create triggers for notifications on purchase_record status changes
+CREATE OR REPLACE FUNCTION notify_purchase_record_status_change()
 RETURNS TRIGGER AS $$
 BEGIN
   IF NEW.status <> OLD.status THEN
-    -- Notify owner when status changes to 'accepted'
-    IF NEW.status = 'accepted' THEN
+    -- Notify owner when status changes to 'payment_processing'
+    IF NEW.status = 'payment_processing' THEN
       PERFORM create_notification(
         NEW.user_id,
-        'application',
-        'Application accepted',
-        'Your application for subscription has been accepted',
-        'application',
+        'purchase',
+        'Payment processing',
+        'Your payment is being processed',
+        'purchase_record',
         NEW.id
       );
     
-    -- Notify owner when status changes to 'rejected'
-    ELSIF NEW.status = 'rejected' THEN
+    -- Notify owner when status changes to 'completed'
+    ELSIF NEW.status = 'completed' THEN
       PERFORM create_notification(
         NEW.user_id,
-        'application',
-        'Application rejected',
-        'Your application for subscription has been rejected',
-        'application',
+        'purchase',
+        'Purchase completed',
+        'Your purchase has been completed successfully',
+        'purchase_record',
+        NEW.id
+      );
+    
+    -- Notify owner when status changes to 'failed'
+    ELSIF NEW.status = 'failed' THEN
+      PERFORM create_notification(
+        NEW.user_id,
+        'purchase',
+        'Purchase failed',
+        'Your purchase could not be completed',
+        'purchase_record',
         NEW.id
       );
     END IF;
     
-    -- Notify subscription owner about new applications
-    IF OLD.status IS NULL OR OLD.status <> 'pending' AND NEW.status = 'pending' THEN
+    -- Notify subscription owner about new purchases
+    IF OLD.status IS NULL OR OLD.status <> 'pending_payment' AND NEW.status = 'pending_payment' THEN
       PERFORM create_notification(
         (SELECT owner_id FROM groups WHERE id = (SELECT group_id FROM group_subs WHERE id = NEW.group_sub_id)),
-        'application',
-        'New subscription application',
-        'Someone has applied to join your subscription',
-        'application',
+        'purchase',
+        'New subscription purchase',
+        'Someone has purchased your subscription',
+        'purchase_record',
         NEW.id
       );
     END IF;
@@ -724,10 +739,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER notify_on_application_status_change
-AFTER UPDATE OF status ON applications
+CREATE TRIGGER notify_on_purchase_record_status_change
+AFTER UPDATE OF status ON purchase_records
 FOR EACH ROW
-EXECUTE FUNCTION notify_application_status_change();
+EXECUTE FUNCTION notify_purchase_record_status_change();
 
 -- Create trigger for notifying when payment is completed
 CREATE OR REPLACE FUNCTION notify_payment_status_change()

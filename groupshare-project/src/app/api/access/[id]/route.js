@@ -14,9 +14,10 @@ import supabase from '@/lib/supabase-client';
  * GET /api/access/[id]
  * Pobiera instrukcje dostępowe za pomocą jednorazowego tokenu
  */
+// src/app/api/access/[id]/route.js
 export async function GET(request, { params }) {
   try {
-    const { id } = params; // ID aplikacji
+    const { id } = params; // ID zakupu
     
     // Pobierz token z URL
     const { searchParams } = new URL(request.url);
@@ -39,20 +40,17 @@ export async function GET(request, { params }) {
     }
 
     // Inicjalizuj serwisy
-    const masterKey = process.env.ENCRYPTION_MASTER_KEY;
-    const kms = new KeyManagementService(masterKey);
-    const encryptionService = new InstructionEncryptionService(kms);
     const tokenService = new TokenService();
+    const keyManagementService = new KeyManagementService(process.env.ENCRYPTION_MASTER_KEY);
+    const encryptionService = new InstructionEncryptionService(keyManagementService);
     const securityLogger = new SecurityLogger(user.id);
-    const fingerprinter = new DeviceFingerprinter();
-    const anomalyDetector = new AnomalyDetector();
-
+    
     // Weryfikuj token
     const isValidToken = await tokenService.verifyToken(token, id);
     if (!isValidToken) {
       await securityLogger.logSecurityEvent(
         'instruction_access',
-        'application',
+        'purchase',
         id,
         'failure',
         { reason: 'Invalid or expired token' }
@@ -64,34 +62,32 @@ export async function GET(request, { params }) {
       );
     }
 
-    // Pobierz informacje o aplikacji
-    const { data: application, error: appError } = await supabase
-      .from('applications')
+    // Pobierz informacje o zakupie
+    const { data: purchase, error: purchaseError } = await supabase
+      .from('purchase_records')
       .select(`
         user_id,
         group_sub_id,
-        group_sub:group_subs(
-          instant_access
-        )
+        status
       `)
       .eq('id', id)
       .single();
 
-    if (appError || !application) {
+    if (purchaseError || !purchase) {
       return NextResponse.json(
-        { error: 'Application not found' },
+        { error: 'Purchase record not found' },
         { status: 404 }
       );
     }
 
     // Sprawdź, czy użytkownik ma prawo dostępu
-    if (application.user_id !== user.id) {
+    if (purchase.user_id !== user.id) {
       await securityLogger.logSecurityEvent(
         'instruction_access',
-        'application',
+        'purchase',
         id,
         'failure',
-        { reason: 'User not authorized for this application' }
+        { reason: 'User not authorized for this purchase' }
       );
 
       return NextResponse.json(
@@ -100,40 +96,13 @@ export async function GET(request, { params }) {
       );
     }
 
-    // Sprawdź, czy oferta ma włączony natychmiastowy dostęp
-    if (!application.group_sub.instant_access) {
+    // Sprawdź, czy płatność została zakończona
+    if (purchase.status !== 'completed') {
       return NextResponse.json(
-        { error: 'This offer does not have instant access enabled' },
+        { error: 'Purchase not completed yet' },
         { status: 400 }
       );
     }
-
-    // Generuj odcisk urządzenia
-    const deviceFingerprint = fingerprinter.generateFingerprint(request);
-
-    // Sprawdź anomalie
-    const hasAnomalies = await anomalyDetector.detectSuspiciousActivity(
-      user.id,
-      'instruction_access',
-      {
-        ip: request.headers.get('x-forwarded-for') || '127.0.0.1',
-        device_fingerprint: deviceFingerprint
-      }
-    );
-
-    if (hasAnomalies) {
-      // Zaloguj anomalię, ale nie blokuj dostępu - możemy dodać dodatkowe uwierzytelnianie
-      await securityLogger.logSecurityEvent(
-        'anomaly_detected',
-        'user',
-        user.id,
-        'warning',
-        { applicationId: id }
-      );
-    }
-
-    // Zapisz odcisk urządzenia
-    await fingerprinter.storeDeviceFingerprint(user.id, deviceFingerprint);
 
     // Pobierz zaszyfrowane instrukcje
     const { data: encryptedInstructions, error: instructionsError } = await supabase
@@ -145,7 +114,7 @@ export async function GET(request, { params }) {
         iv,
         encryption_version
       `)
-      .eq('group_sub_id', application.group_sub_id)
+      .eq('group_sub_id', purchase.group_sub_id)
       .single();
 
     if (instructionsError || !encryptedInstructions) {
@@ -167,16 +136,17 @@ export async function GET(request, { params }) {
     // Zaloguj udany dostęp
     await securityLogger.logSecurityEvent(
       'instruction_access',
-      'application',
+      'purchase',
       id,
       'success'
     );
 
-    // Aktualizuj status aplikacji
+    // Aktualizuj status dostępu
     await supabase
-      .from('applications')
+      .from('purchase_records')
       .update({
-        access_provided: true
+        access_provided: true,
+        access_provided_at: new Date().toISOString()
       })
       .eq('id', id);
 

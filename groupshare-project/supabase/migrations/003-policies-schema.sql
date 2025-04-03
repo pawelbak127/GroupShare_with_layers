@@ -8,7 +8,7 @@ ALTER TABLE group_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE subscription_platforms ENABLE ROW LEVEL SECURITY;
 ALTER TABLE group_subs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE access_instructions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE applications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE purchase_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE access_tokens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ratings ENABLE ROW LEVEL SECURITY;
@@ -181,10 +181,10 @@ CREATE POLICY "Group admins can update access instructions" ON access_instructio
   );
 
 ----------------------
--- Policy: applications
+-- Policy: purchase_records
 ----------------------
--- Users can see applications they created or applications for subscriptions they manage
-CREATE POLICY "Users can view relevant applications" ON applications
+-- Users can see purchase records they created or purchase records for subscriptions they manage
+CREATE POLICY "Users can view relevant purchase records" ON purchase_records
   FOR SELECT USING (
     user_id = auth.user_id() OR
     is_group_admin(
@@ -197,21 +197,21 @@ CREATE POLICY "Users can view relevant applications" ON applications
     )
   );
 
--- Authenticated users can create applications
-CREATE POLICY "Authenticated users can create applications" ON applications
+-- Authenticated users can create purchase records
+CREATE POLICY "Authenticated users can create purchase records" ON purchase_records
   FOR INSERT WITH CHECK (
     auth.role() = 'authenticated' AND
     user_id = auth.user_id()
   );
 
--- Users can update their own applications
-CREATE POLICY "Users can update own applications" ON applications
+-- Users can update their own purchase records
+CREATE POLICY "Users can update own purchase records" ON purchase_records
   FOR UPDATE USING (
     user_id = auth.user_id()
   );
 
--- Group admins can update applications for their subscriptions
-CREATE POLICY "Group admins can update applications" ON applications
+-- Group admins can update purchase records for their subscriptions
+CREATE POLICY "Group admins can update purchase records" ON purchase_records
   FOR UPDATE USING (
     is_group_admin(
       (SELECT group_id FROM group_subs WHERE id = group_sub_id), 
@@ -229,7 +229,7 @@ CREATE POLICY "Group admins can update applications" ON applications
 -- Only token owners can view their tokens
 CREATE POLICY "Users can view own tokens" ON access_tokens
   FOR SELECT USING (
-    (SELECT user_id FROM applications WHERE id = application_id) = auth.user_id()
+    (SELECT user_id FROM purchase_records WHERE id = purchase_record_id) = auth.user_id()
   );
 
 -- Only service role can create tokens
@@ -242,7 +242,7 @@ CREATE POLICY "Service can create tokens" ON access_tokens
 CREATE POLICY "Service and users can update tokens" ON access_tokens
   FOR UPDATE USING (
     auth.role() = 'service_role' OR
-    (SELECT user_id FROM applications WHERE id = application_id) = auth.user_id()
+    (SELECT user_id FROM purchase_records WHERE id = purchase_record_id) = auth.user_id()
   );
 
 ----------------------
