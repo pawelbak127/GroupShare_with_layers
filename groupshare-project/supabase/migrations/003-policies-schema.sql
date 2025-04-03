@@ -29,8 +29,7 @@ ALTER TABLE dispute_evidence ENABLE ROW LEVEL SECURITY;
 ----------------------
 -- Każdy może zobaczyć tylko podstawowe informacje o profilu
 CREATE POLICY "Public users can view basic profile info" ON user_profiles
-  FOR SELECT USING (true)
-  WITH CHECK (verification_level = 'basic');
+  FOR SELECT USING (true);
 
 -- Dodatkowa polityka dla uwierzytelnionych użytkowników umożliwiająca pełny dostęp
 CREATE POLICY "Authenticated users can view full profiles" ON user_profiles
@@ -336,7 +335,10 @@ CREATE POLICY "Users can view own notifications" ON notifications
 -- Users can mark own notifications as read
 CREATE POLICY "Users can mark own notifications as read" ON notifications
   FOR UPDATE USING (user_id = auth.user_id())
-  WITH CHECK (user_id = auth.user_id() AND (xmax::text = xmin::text OR is_read IS DISTINCT FROM OLD.is_read));
+  WITH CHECK (
+    user_id = auth.user_id() AND 
+    is_read IS NOT NULL
+  );
 
 ----------------------
 -- Policy: messages

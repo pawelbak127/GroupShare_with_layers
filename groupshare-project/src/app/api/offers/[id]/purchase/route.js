@@ -1,4 +1,11 @@
-// Kompletna implementacja dla src/app/api/offers/[id]/purchase/route.js
+import { NextResponse } from 'next/server';
+import { currentUser } from '@clerk/nextjs';
+import supabase from '@/lib/supabase-client';
+
+/**
+ * POST /api/offers/[id]/purchase
+ * Inicjuje zakup subskrypcji z natychmiastowym dostępem
+ */
 export async function POST(request, { params }) {
   try {
     const { id } = params;
@@ -6,7 +13,10 @@ export async function POST(request, { params }) {
     // Sprawdź autentykację
     const user = await currentUser();
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
     }
     
     // Pobierz profil użytkownika
@@ -57,6 +67,9 @@ export async function POST(request, { params }) {
     return NextResponse.json({ purchase }, { status: 201 });
   } catch (error) {
     console.error('Error initiating purchase:', error);
-    return NextResponse.json({ error: 'Failed to initiate purchase' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to initiate purchase' },
+      { status: 500 }
+    );
   }
 }

@@ -14,7 +14,6 @@ import supabase from '@/lib/supabase-client';
  * GET /api/access/[id]
  * Pobiera instrukcje dostępowe za pomocą jednorazowego tokenu
  */
-// src/app/api/access/[id]/route.js
 export async function GET(request, { params }) {
   try {
     const { id } = params; // ID zakupu

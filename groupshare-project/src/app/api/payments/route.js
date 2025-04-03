@@ -1,26 +1,38 @@
-// src/app/api/payments/route.js
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-import { currentUser } from '@clerk/nextjs/server';
+import { currentUser } from '@clerk/nextjs';
+import supabase from '@/lib/supabase-client';
 
-// Inicjalizacja klienta Supabase
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
+/**
+ * POST /api/payments
+ * Przetwarza płatność za subskrypcję i automatycznie przyznaje dostęp
+ */
 export async function POST(request) {
   try {
     const { purchaseId, paymentMethod } = await request.json();
-    const user = await currentUser();
     
+    // Sprawdź autentykację
+    const user = await currentUser();
     if (!user) {
       return NextResponse.json(
-        { error: 'User not authenticated' },
+        { error: 'Unauthorized' },
         { status: 401 }
       );
     }
-
+    
+    // Pobierz profil użytkownika
+    const { data: userProfile } = await supabase
+      .from('user_profiles')
+      .select('id')
+      .eq('external_auth_id', user.id)
+      .single();
+    
+    if (!userProfile) {
+      return NextResponse.json(
+        { error: 'User profile not found' },
+        { status: 404 }
+      );
+    }
+    
     // Pobierz zakup i powiązaną ofertę
     const { data: purchase, error: purchaseError } = await supabase
       .from('purchase_records')
@@ -39,59 +51,64 @@ export async function POST(request) {
       );
     }
     
-    // Oblicz kwotę i prowizję
-    const amount = purchase.group_sub.price_per_slot;
-    const platformFeePercent = 0.05;
-    const platformFee = amount * platformFeePercent;
-    const sellerAmount = amount - platformFee;
-    
-    // Aktualizuj status zakupu
-    const { error: updateError } = await supabase
-      .from('purchase_records')
-      .update({ status: 'payment_processing' })
-      .eq('id', purchaseId);
-      
-    if (updateError) {
-      console.error('Error updating purchase status:', updateError);
+    // Sprawdź, czy zakup należy do użytkownika
+    if (purchase.user_id !== userProfile.id) {
       return NextResponse.json(
-        { error: 'Failed to update purchase status' },
+        { error: 'You do not have permission to process this payment' },
+        { status: 403 }
+      );
+    }
+    
+    // Wywołaj funkcję process_payment z bazy danych
+    const { data: paymentResult, error: paymentError } = await supabase.rpc(
+      'process_payment',
+      {
+        p_user_id: userProfile.id,
+        p_group_sub_id: purchase.group_sub_id,
+        p_payment_method: paymentMethod,
+        p_payment_provider: 'stripe', // Możemy dostosować w zależności od wyboru
+        p_payment_id: 'pmt_' + Math.random().toString(36).substr(2, 9) // Przykładowe ID
+      }
+    );
+    
+    if (paymentError) {
+      console.error('Error processing payment:', paymentError);
+      return NextResponse.json(
+        { error: 'Failed to process payment' },
         { status: 500 }
       );
     }
     
-    // Utwórz transakcję
-    const { data: transaction, error: transactionError } = await supabase
-      .from('transactions')
+    // Generowanie tokenu dostępu
+    const { data: tokenData, error: tokenError } = await supabase.rpc(
+      'generate_secure_token'
+    );
+    
+    if (tokenError) {
+      console.error('Error generating token:', tokenError);
+      // Płatność już się powiodła, więc nie zwracamy błędu
+    }
+    
+    const token = tokenData || 'fallback_token_' + Math.random().toString(36).substr(2, 9);
+    
+    // Zapisanie tokenu dostępu
+    await supabase
+      .from('access_tokens')
       .insert({
-        buyer_id: user.id,  // Poprawiono z userProfile.id na user.id
-        seller_id: purchase.group_sub.groups.owner_id,
-        group_sub_id: purchase.group_sub_id,
         purchase_record_id: purchaseId,
-        amount: amount,
-        platform_fee: platformFee,
-        seller_amount: sellerAmount,
-        payment_method: paymentMethod,
-        status: 'pending'
-      })
-      .select()
-      .single();
+        token_hash: hashToken(token), // Funkcja hashowania powinna być zaimplementowana
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(), // 30 minut
+        used: false
+      });
     
-    if (transactionError || !transaction) {
-      console.error('Error creating transaction:', transactionError);
-      return NextResponse.json(
-        { error: 'Failed to create transaction' },
-        { status: 500 }
-      );
-    }
-    
-    // W rzeczywistej implementacji: integracja z bramką płatności
-    const paymentGatewayUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/payment-gateway/process?transactionId=${transaction.id}`;
+    // Tworzymy URL dostępu
+    const accessUrl = `${process.env.NEXT_PUBLIC_APP_URL}/access?id=${purchaseId}&token=${token}`;
     
     return NextResponse.json({
-      id: transaction.id,
-      amount,
-      status: 'pending',
-      payment_url: paymentGatewayUrl
+      success: true,
+      message: 'Payment processed successfully',
+      purchaseId: purchaseId,
+      accessUrl: accessUrl
     });
   } catch (error) {
     console.error('Error processing payment:', error);
@@ -100,4 +117,12 @@ export async function POST(request) {
       { status: 500 }
     );
   }
+}
+
+// Prosta funkcja hashująca token (w produkcji powinna być mocniejsza)
+function hashToken(token) {
+  return require('crypto')
+    .createHash('sha256')
+    .update(token)
+    .digest('hex');
 }

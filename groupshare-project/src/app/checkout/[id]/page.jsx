@@ -70,9 +70,9 @@ export default function CheckoutPage() {
       
       const paymentData = await response.json();
       
-      // Przekieruj do strony płatności lub pokaż formularz BLIK
-      if (selectedPaymentMethod === 'blik') {
-        router.push(`/checkout/${id}/blik?payment_id=${paymentData.id}`);
+      // W nowym modelu, przekierowujemy bezpośrednio do strony z instrukcjami dostępu
+      if (paymentData.accessUrl) {
+        window.location.href = paymentData.accessUrl;
       } else {
         // Przekieruj do zewnętrznego procesora płatności
         window.location.href = paymentData.payment_url;

@@ -612,7 +612,7 @@ INSERT INTO group_invitations (
   created_at
 ) VALUES
 (
-  'aaaaaaaa-gggg-gggg-gggg-gggggggggggg',
+  '11111111-2222-3333-4444-555555555555', 
   '11111111-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
   'nowy.uzytkownik@example.com',
   'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
@@ -621,4 +621,4 @@ INSERT INTO group_invitations (
   'pending',
   NOW() + INTERVAL '7 days',
   NOW() - INTERVAL '1 day'
-);
+)

@@ -84,7 +84,7 @@ const SecureAccessDisplay = ({ applicationId, token }) => {
   // Potwierdź działający dostęp
   const confirmAccess = async (isWorking) => {
     try {
-      const response = await fetch(`/api/applications/${applicationId}/confirm-access`, {
+      const response = await fetch(`/api/purchases/${applicationId}/confirm-access`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -156,8 +156,7 @@ BEGIN
         -- Check if fingerprint already exists for this user
         SELECT id INTO device_id
         FROM device_fingerprints
-        WHERE user_id = p_user_id AND fingerprint = p_fingerprint
-        FOR UPDATE; -- Blokowanie wiersza w przypadku równoległego dostępu
+        WHERE user_id = p_user_id AND fingerprint = p_fingerprint;
         
         IF device_id IS NULL THEN
             -- Insert new fingerprint
@@ -423,8 +422,7 @@ BEGIN
                 WHEN slots_available - 1 <= 0 THEN 'full'
                 ELSE status
             END
-        WHERE id = NEW.group_sub_id
-        FOR UPDATE; -- Dodanie FOR UPDATE zapewnia wyłączną blokadę wiersza
+        WHERE id = NEW.group_sub_id;
         
         -- Dodatkowe sprawdzenie, czy nie przekroczono limitu slotów
         IF (SELECT slots_available FROM group_subs WHERE id = NEW.group_sub_id) < 0 THEN
@@ -439,8 +437,7 @@ BEGIN
                 WHEN status = 'full' AND slots_available + 1 > 0 THEN 'active'
                 ELSE status
             END
-        WHERE id = NEW.group_sub_id
-        FOR UPDATE;
+        WHERE id = NEW.group_sub_id;
     END IF;
     
     RETURN NEW;

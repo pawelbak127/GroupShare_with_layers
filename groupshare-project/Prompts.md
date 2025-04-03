@@ -403,3 +403,68 @@ Pomóż mi zaimplementować:
 
 Potrzebuję pełnej implementacji w Next.js i Supabase, która będzie solidna kryptograficznie, ale jednocześnie możliwa do zaimplementowania i utrzymania przez jednego dewelopera. Szczególnie zależy mi na zachowaniu funkcjonalności natychmiastowego dostępu.
 ```
+
+
+
+PROMPT DLA AI CLAUDE.AI
+Prompt: Przygotowanie testów automatycznych dla nowego systemu natychmiastowego dostępu w GroupShare
+Kontekst Projektu
+Pracujesz nad projektem GroupShare - platformą umożliwiającą użytkownikom współdzielenie subskrypcji cyfrowych (Netflix, Spotify, YouTube Premium, itp.). Przeprowadziliśmy właśnie fundamentalną zmianę w modelu biznesowym aplikacji, przechodząc z modelu wymagającego ręcznego potwierdzenia przez sprzedającego na system natychmiastowych transakcji, gdzie kupujący otrzymuje dostęp automatycznie po udanej płatności.
+Kluczowe zmiany obejmują:
+
+Wdrożenie natychmiastowego dostępu po zakupie
+Szyfrowanie i bezpieczne przechowywanie instrukcji dostępu
+Jednorazowe tokeny dostępu do instrukcji
+Automatyczną obsługę procesu płatności
+System do potwierdzania działania dostępu przez kupującego
+
+Dostępne Pliki i Dokumentacja
+Masz dostęp do:
+
+Plików źródłowych frontendu (React, Next.js)
+Plików źródłowych backendu (API Routes, Node.js)
+Schematów bazy danych (Supabase/PostgreSQL)
+Nowo wygenerowanych komponentów i endpointów obsługujących natychmiastowy dostęp
+
+Kluczowe Nowe Pliki:
+
+/src/app/api/access/[id]/route.js - Endpoint dla instrukcji dostępowych
+/src/app/api/access-instructions/route.js - Zarządzanie instrukcjami dostępu
+/src/app/api/purchases/[id]/confirm-access/route.js - Potwierdzanie dostępu
+/src/components/secure-access/SecureAccessDisplay.jsx - Wyświetlanie instrukcji
+/src/app/access/page.jsx - Strona instrukcji dostępu
+
+Twoje Zadanie
+Potrzebuję kompleksowego planu testów automatycznych i implementacji testów dla nowo wdrożonych funkcjonalności. Należy:
+
+Zaproponować odpowiednie środowiska i narzędzia testowe dla frontendu i backendu
+Stworzyć plan testów obejmujący:
+
+Testy jednostkowe (komponenty, funkcje)
+Testy integracyjne (interakcje między komponentami)
+Testy funkcjonalne/E2E (całe przepływy biznesowe)
+Testy bezpieczeństwa (szczególnie dla szyfrowania i tokenów)
+
+
+Zaimplementować najważniejsze testy automatyczne, uwzględniając:
+
+Mockowanie usług zewnętrznych (płatności, szyfrowanie)
+Testowanie pozytywnych i negatywnych scenariuszy
+Testowanie mechanizmów bezpieczeństwa
+
+
+
+Oczekiwane Wyniki
+
+Rekomendacja środowiska i narzędzi testowych z uzasadnieniem
+Szczegółowy plan testów dla wszystkich nowych funkcjonalności
+Przykładowe implementacje testów dla kluczowych funkcjonalności:
+
+Test procesu zakupu z natychmiastowym dostępem
+Test mechanizmu jednorazowych tokenów
+Test szyfrowania i deszyfrowania instrukcji
+Test potwierdzania dostępu i obsługi sporów
+
+
+
+Proszę o kompleksowe podejście, które pozwoli nam upewnić się, że nasz nowy model biznesowy działa poprawnie i bezpiecznie przed pełnym wdrożeniem produkcyjnym.

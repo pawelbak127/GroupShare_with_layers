@@ -62,6 +62,28 @@ const OfferCard = ({ offer }) => {
       <div className="p-6">
         <div className="flex items-center mb-4">
           {/* Logo i nazwa platformy */}
+          <div className="w-10 h-10 bg-gray-200 rounded-full flex items-center justify-center overflow-hidden">
+            {offer.subscription_platforms?.icon ? (
+              <img 
+                src={offer.subscription_platforms.icon} 
+                alt={offer.subscription_platforms.name} 
+                className="w-6 h-6 object-contain"
+              />
+            ) : (
+              <span className="text-gray-500 text-xs font-bold">
+                {offer.subscription_platforms?.name?.slice(0, 2) || 'SP'}
+              </span>
+            )}
+          </div>
+          <h3 className="ml-3 font-semibold text-gray-900">
+            {offer.subscription_platforms?.name || 'Subskrypcja'}
+          </h3>
+          
+          {offer.instant_access && (
+            <span className="ml-3 px-2 py-0.5 bg-green-100 text-green-800 text-xs font-medium rounded-full">
+              Natychmiastowy dostęp
+            </span>
+          )}
         </div>
         
         <div className="mb-4">
@@ -89,7 +111,26 @@ const OfferCard = ({ offer }) => {
       {/* Przycisk zakupu */}
       <div className="px-6 py-3 bg-gray-50 border-t border-gray-200 flex justify-between items-center">
         <div className="flex items-center">
-          {/* Informacje o sprzedającym */}
+          {offer.owner?.user_profiles && (
+            <div className="flex items-center">
+              <div className="w-6 h-6 bg-gray-200 rounded-full overflow-hidden">
+                {offer.owner.user_profiles.avatar_url ? (
+                  <img 
+                    src={offer.owner.user_profiles.avatar_url} 
+                    alt={offer.owner.user_profiles.display_name} 
+                    className="w-6 h-6 object-cover"
+                  />
+                ) : (
+                  <span className="w-6 h-6 flex items-center justify-center text-xs font-bold text-gray-500">
+                    {offer.owner.user_profiles.display_name?.slice(0, 1) || '?'}
+                  </span>
+                )}
+              </div>
+              <span className="ml-2 text-sm text-gray-600">
+                {offer.owner.user_profiles.display_name || 'Sprzedający'}
+              </span>
+            </div>
+          )}
         </div>
         
         <button 

@@ -139,8 +139,7 @@ CREATE TABLE purchase_records (
     access_provided BOOLEAN DEFAULT FALSE,
     access_provided_at TIMESTAMP WITH TIME ZONE,
     access_confirmed BOOLEAN DEFAULT FALSE,
-    access_confirmed_at TIMESTAMP WITH TIME ZONE,
-    COMMENT ON COLUMN access_provided IS 'Indicates if access credentials have been provided to the buyer. Automatically set to TRUE upon successful payment.'
+    access_confirmed_at TIMESTAMP WITH TIME ZONE
 );
 
 -- Create access tokens table
