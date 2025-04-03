@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs';
-import supabase from '@/lib/supabase-client';
+import supabase from '../../../lib/supabase-client';
 
 /**
  * GET /api/groups

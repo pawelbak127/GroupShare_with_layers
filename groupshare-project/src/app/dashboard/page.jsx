@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 // Zaktualizowany import - używamy tylko useUser z Clerk
 import { useUser } from '@clerk/nextjs';
-import LoadingSpinner from '@/components/common/LoadingSpinner';
+import LoadingSpinner from '../../components/common/LoadingSpinner';
 
 export default function Dashboard() {
   // Użyj useUser zamiast useUserProfile
