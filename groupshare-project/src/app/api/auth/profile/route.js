@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { currentUser } from '@clerk/nextjs';
+import { currentUser } from '@clerk/nextjs/server';
 import { getUserByAuthId, createUserProfile } from '@/lib/supabase-client';
 
 /**

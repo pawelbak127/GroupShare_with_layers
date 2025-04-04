@@ -1,7 +1,7 @@
 // src/app/api/offers/[id]/route.js
 import { NextResponse } from 'next/server';
 import { getSubscriptionOffer } from '@/lib/supabase';
-import { currentUser } from '@clerk/nextjs';
+import { currentUser } from '@clerk/nextjs/server';
 
 /**
  * GET /api/offers/[id]
