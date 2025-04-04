@@ -19,49 +19,34 @@ export async function POST(request, { params }) {
       );
     }
     
-    // Pobierz profil użytkownika
-    const { data: userProfile, error: profileError } = await supabase
-      .from('user_profiles')
-      .select('id')
-      .eq('external_auth_id', user.id)
-      .single();
-    
-    // Sprawdź czy profil istnieje
-    if (profileError || !userProfile) {
-      console.error('User profile not found, creating one...');
+    // Pobierz lub utwórz profil użytkownika poprzez dedykowane API
+    let userProfileId;
+    try {
+      // Wykorzystanie istniejącego endpointu, który ma odpowiednie uprawnienia
+      const profileResponse = await fetch(
+        `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/profile`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            // Wykorzystujemy bieżącą sesję - system Clerk zapewni autentykację
+          }
+        }
+      );
       
-      // Utwórz profil użytkownika, jeśli nie istnieje
-      const newProfile = {
-        external_auth_id: user.id,
-        display_name: user.firstName 
-          ? `${user.firstName} ${user.lastName || ''}`.trim() 
-          : (user.username || 'Nowy użytkownik'),
-        email: user.emailAddresses[0]?.emailAddress || '',
-        phone_number: user.phoneNumbers[0]?.phoneNumber || null,
-        profile_type: 'both', // Domyślna wartość
-        verification_level: 'basic', // Domyślna wartość
-        bio: '',
-        avatar_url: user.imageUrl || null
-      };
-      
-      const { data: createdProfile, error: createError } = await supabase
-        .from('user_profiles')
-        .insert([newProfile])
-        .select()
-        .single();
-      
-      if (createError || !createdProfile) {
-        console.error('Error creating user profile:', createError);
-        return NextResponse.json(
-          { error: 'Failed to create user profile' },
-          { status: 500 }
-        );
+      if (!profileResponse.ok) {
+        throw new Error(`Failed to fetch user profile: ${profileResponse.status}`);
       }
       
-      // Użyj nowo utworzonego profilu
-      var userProfileId = createdProfile.id;
-    } else {
-      var userProfileId = userProfile.id;
+      const userProfile = await profileResponse.json();
+      userProfileId = userProfile.id;
+      
+    } catch (error) {
+      console.error('Error fetching or creating user profile:', error);
+      return NextResponse.json(
+        { error: 'Failed to process user profile' },
+        { status: 500 }
+      );
     }
     
     // Sprawdź ofertę i dostępność miejsc

@@ -33,7 +33,7 @@ export async function GET(request) {
   } catch (error) {
     console.error('Error fetching offers:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch subscription offers' }, 
+      { error: error.message || 'Failed to fetch subscription offers', code: error.code || 'unknown' }, 
       { status: 500 }
     );
   }
@@ -68,15 +68,45 @@ export async function POST(request) {
       }
     }
     
+    // Validate numeric fields
+    if (isNaN(parseFloat(body.pricePerSlot)) || parseFloat(body.pricePerSlot) <= 0) {
+      return NextResponse.json(
+        { error: 'Price per slot must be a positive number' },
+        { status: 400 }
+      );
+    }
+    
+    if (!Number.isInteger(body.slotsTotal) || body.slotsTotal <= 0) {
+      return NextResponse.json(
+        { error: 'Slots total must be a positive integer' },
+        { status: 400 }
+      );
+    }
+    
     // Get user profile ID from Supabase
-    const userProfileResponse = await fetch(
-      `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/profile`,
-      {
-        headers: {
-          'Authorization': `Bearer ${await user.getToken()}`
+    let userProfileResponse;
+    try {
+      userProfileResponse = await fetch(
+        `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/profile`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            // Clerk zapewni autentykację
+          }
         }
+      );
+      
+      if (!userProfileResponse.ok) {
+        throw new Error(`Failed to fetch user profile: ${userProfileResponse.status}`);
       }
-    );
+    } catch (error) {
+      console.error('Error fetching user profile:', error);
+      return NextResponse.json(
+        { error: 'Failed to verify user profile' },
+        { status: 500 }
+      );
+    }
     
     const userProfile = await userProfileResponse.json();
     if (!userProfile || !userProfile.id) {
@@ -87,16 +117,38 @@ export async function POST(request) {
     }
     
     // Verify user is the owner or admin of the group
-    const groupResponse = await fetch(
-      `${process.env.NEXT_PUBLIC_APP_URL}/api/groups/${body.groupId}/members?userId=${userProfile.id}`,
-      {
-        headers: {
-          'Authorization': `Bearer ${await user.getToken()}`
+    let groupMembershipResponse;
+    try {
+      groupMembershipResponse = await fetch(
+        `${process.env.NEXT_PUBLIC_APP_URL}/api/groups/${body.groupId}/members?userId=${userProfile.id}`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            // Clerk zapewni autentykację
+          }
+        }
+      );
+      
+      if (!groupMembershipResponse.ok) {
+        if (groupMembershipResponse.status === 404) {
+          return NextResponse.json(
+            { error: 'Group not found' },
+            { status: 404 }
+          );
+        } else {
+          throw new Error(`Failed to verify group membership: ${groupMembershipResponse.status}`);
         }
       }
-    );
+    } catch (error) {
+      console.error('Error verifying group membership:', error);
+      return NextResponse.json(
+        { error: 'Failed to verify group membership' },
+        { status: 500 }
+      );
+    }
     
-    const groupMembership = await groupResponse.json();
+    const groupMembership = await groupMembershipResponse.json();
     if (!groupMembership || (groupMembership.role !== 'admin' && !groupMembership.isOwner)) {
       return NextResponse.json(
         { error: 'You do not have permission to create offers for this group' },
@@ -104,54 +156,107 @@ export async function POST(request) {
       );
     }
     
-    // Prepare offer data
+    // Przygotowanie danych oferty
     const offerData = {
       group_id: body.groupId,
       platform_id: body.platformId,
       status: 'active',
       slots_total: body.slotsTotal,
-      slots_available: body.slotsTotal, // Initially all slots are available
+      slots_available: body.slotsTotal,
       price_per_slot: body.pricePerSlot,
       currency: body.currency || 'PLN',
       instant_access: true // Wszystkie oferty mają teraz natychmiastowy dostęp
     };
     
-    // Create offer in Supabase
-    const response = await fetch(
-      `${process.env.NEXT_PUBLIC_APP_URL}/api/supabase/group_subs`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${await user.getToken()}`
-        },
-        body: JSON.stringify(offerData)
+    // Tworzenie oferty w Supabase
+    let response;
+    try {
+      response = await fetch(
+        `${process.env.NEXT_PUBLIC_APP_URL}/api/supabase/group_subs`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${await user.getToken()}`
+          },
+          body: JSON.stringify(offerData)
+        }
+      );
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Failed to create offer:', errorData);
+        
+        if (response.status === 403) {
+          return NextResponse.json(
+            { error: 'You do not have permission to create offers for this group' },
+            { status: 403 }
+          );
+        } else if (response.status === 400) {
+          return NextResponse.json(
+            { error: errorData.error || 'Invalid offer data' },
+            { status: 400 }
+          );
+        } else {
+          return NextResponse.json(
+            { error: errorData.error || 'Failed to create subscription offer' },
+            { status: response.status || 500 }
+          );
+        }
       }
-    );
+    } catch (error) {
+      console.error('Error creating offer in Supabase:', error);
+      return NextResponse.json(
+        { error: 'Failed to create subscription offer in database' },
+        { status: 500 }
+      );
+    }
     
     const createdOffer = await response.json();
     
-    // Store access instructions in Supabase (zawsze dla wszystkich ofert)
-    await fetch(
-      `${process.env.NEXT_PUBLIC_APP_URL}/api/access-instructions`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${await user.getToken()}`
-        },
-        body: JSON.stringify({
-          groupSubId: createdOffer.id,
-          instructions: body.accessInstructions
-        })
+    // Sprawdzenie wyniku
+    if (!createdOffer || !createdOffer.id) {
+      console.warn('Offer creation response missing ID');
+      return NextResponse.json(
+        { error: 'Offer was created but returned invalid data' },
+        { status: 500 }
+      );
+    }
+    
+    // Store access instructions in Supabase
+    try {
+      const instructionsResponse = await fetch(
+        `${process.env.NEXT_PUBLIC_APP_URL}/api/access-instructions`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${await user.getToken()}`
+          },
+          body: JSON.stringify({
+            groupSubId: createdOffer.id,
+            instructions: body.accessInstructions
+          })
+        }
+      );
+      
+      if (!instructionsResponse.ok) {
+        const errorData = await instructionsResponse.json();
+        console.error('Failed to save access instructions:', errorData);
+        
+        // Don't fail the entire operation, but log the error
+        // Could clean up the created offer, but it's still usable
       }
-    );
+    } catch (error) {
+      console.error('Error saving access instructions:', error);
+      // Don't fail the entire operation
+    }
     
     return NextResponse.json(createdOffer, { status: 201 });
   } catch (error) {
     console.error('Error creating offer:', error);
     return NextResponse.json(
-      { error: 'Failed to create subscription offer' }, 
+      { error: error.message || 'Failed to create subscription offer' }, 
       { status: 500 }
     );
   }

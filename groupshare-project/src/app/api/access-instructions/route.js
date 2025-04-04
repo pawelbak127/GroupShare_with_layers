@@ -43,10 +43,18 @@ export async function POST(request) {
       .single();
 
     if (offerError) {
-      return NextResponse.json(
-        { error: 'Subscription offer not found' },
-        { status: 404 }
-      );
+      if (offerError.code === 'PGRST116') {
+        return NextResponse.json(
+          { error: 'Subscription offer not found', code: offerError.code },
+          { status: 404 }
+        );
+      } else {
+        console.error('Error fetching offer for access instructions:', offerError);
+        return NextResponse.json(
+          { error: offerError.message || 'Failed to verify offer ownership', code: offerError.code },
+          { status: 500 }
+        );
+      }
     }
 
     // Sprawdź, czy użytkownik jest właścicielem grupy
@@ -65,7 +73,7 @@ export async function POST(request) {
 
     // Pobierz lub wygeneruj klucz dla grupy
     let keyId;
-    const { data: existingKey } = await supabase
+    const { data: existingKey, error: keyError } = await supabase
       .from('encryption_keys')
       .select('id')
       .eq('key_type', 'group')
@@ -73,18 +81,69 @@ export async function POST(request) {
       .eq('active', true)
       .single();
 
+    if (keyError) {
+      if (keyError.code !== 'PGRST116') { // Ignorujemy błąd "nie znaleziono"
+        console.error('Error fetching encryption key:', keyError);
+        await securityLogger.logSecurityEvent(
+          'instruction_encryption',
+          'group_sub',
+          groupSubId,
+          'failure',
+          { error: keyError.message, code: keyError.code }
+        );
+        
+        return NextResponse.json(
+          { error: keyError.message || 'Failed to retrieve encryption key', code: keyError.code },
+          { status: 500 }
+        );
+      }
+    }
+
     if (existingKey) {
       keyId = existingKey.id;
     } else {
-      // Generuj nowy klucz
-      keyId = await kms.generateKeyPair('group', groupSubId);
+      try {
+        // Generuj nowy klucz
+        keyId = await kms.generateKeyPair('group', groupSubId);
+      } catch (genError) {
+        console.error('Error generating key pair:', genError);
+        await securityLogger.logSecurityEvent(
+          'instruction_encryption',
+          'group_sub',
+          groupSubId,
+          'failure',
+          { error: genError.message }
+        );
+        
+        return NextResponse.json(
+          { error: 'Failed to generate encryption key' },
+          { status: 500 }
+        );
+      }
     }
 
     // Szyfruj instrukcje
-    const encryptedData = await encryptionService.encryptInstructions(
-      instructions,
-      keyId
-    );
+    let encryptedData;
+    try {
+      encryptedData = await encryptionService.encryptInstructions(
+        instructions,
+        keyId
+      );
+    } catch (encryptError) {
+      console.error('Error encrypting instructions:', encryptError);
+      await securityLogger.logSecurityEvent(
+        'instruction_encryption',
+        'group_sub',
+        groupSubId,
+        'failure',
+        { error: encryptError.message }
+      );
+      
+      return NextResponse.json(
+        { error: 'Failed to encrypt instructions' },
+        { status: 500 }
+      );
+    }
 
     // Zapisz zaszyfrowane instrukcje
     const { data: savedData, error: saveError } = await supabase
@@ -103,25 +162,61 @@ export async function POST(request) {
       .select();
 
     if (saveError) {
+      // Szczegółowa obsługa błędów
       await securityLogger.logSecurityEvent(
         'instruction_encryption',
         'group_sub',
         groupSubId,
         'failure',
-        { error: saveError.message }
+        { error: saveError.message, code: saveError.code }
       );
-
+      
+      if (saveError.code === '42501') {
+        return NextResponse.json(
+          { error: 'You do not have permission to save instructions', code: saveError.code },
+          { status: 403 }
+        );
+      } else if (saveError.code === '23503') {
+        return NextResponse.json(
+          { error: 'Referenced subscription does not exist', code: saveError.code },
+          { status: 400 }
+        );
+      } else {
+        console.error('Error saving encrypted instructions:', saveError);
+        return NextResponse.json(
+          { error: saveError.message || 'Failed to save encrypted instructions', code: saveError.code },
+          { status: 500 }
+        );
+      }
+    }
+    
+    // Sprawdzenie czy dane zostały zapisane
+    if (!savedData || savedData.length === 0) {
+      console.warn('No data returned after saving instructions');
+      await securityLogger.logSecurityEvent(
+        'instruction_encryption',
+        'group_sub',
+        groupSubId,
+        'warning',
+        { message: 'No data returned after saving' }
+      );
+      
       return NextResponse.json(
-        { error: 'Failed to save encrypted instructions' },
+        { error: 'Instructions saved but no confirmation data returned' },
         { status: 500 }
       );
     }
 
     // Zaktualizuj flagę instant_access w ofercie
-    await supabase
+    const { error: updateError } = await supabase
       .from('group_subs')
       .update({ instant_access: true })
       .eq('id', groupSubId);
+
+    if (updateError) {
+      console.warn('Error updating instant_access flag:', updateError);
+      // Nie zwracamy błędu, ponieważ główna operacja się udała
+    }
 
     // Zaloguj operację
     await securityLogger.logSecurityEvent(
@@ -138,7 +233,7 @@ export async function POST(request) {
   } catch (error) {
     console.error('Error encrypting instructions:', error);
     return NextResponse.json(
-      { error: 'Failed to process instructions' },
+      { error: error.message || 'Failed to process instructions' },
       { status: 500 }
     );
   }

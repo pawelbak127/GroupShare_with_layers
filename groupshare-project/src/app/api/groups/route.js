@@ -36,9 +36,26 @@ export async function GET(request) {
       .eq('status', 'active');
 
     if (error) {
-      console.error('Error fetching groups:', error);
+      if (error.code === '42501') {
+        console.error('Permission denied when fetching groups:', error);
+        return NextResponse.json(
+          { error: 'You do not have permission to access these groups', code: error.code },
+          { status: 403 }
+        );
+      } else {
+        console.error('Error fetching groups:', error);
+        return NextResponse.json(
+          { error: error.message || 'Failed to fetch groups', code: error.code },
+          { status: 500 }
+        );
+      }
+    }
+
+    // Sprawdź czy dane są prawidłowe
+    if (!data) {
+      console.warn('No data returned when fetching groups');
       return NextResponse.json(
-        { error: 'Failed to fetch groups' },
+        { error: 'Failed to fetch groups - no data returned' },
         { status: 500 }
       );
     }
@@ -54,7 +71,7 @@ export async function GET(request) {
   } catch (error) {
     console.error('Error in groups API:', error);
     return NextResponse.json(
-      { error: 'An unexpected error occurred' },
+      { error: error.message || 'An unexpected error occurred' },
       { status: 500 }
     );
   }
@@ -100,13 +117,42 @@ export async function POST(request) {
       .single();
 
     if (groupError) {
-      console.error('Error creating group:', groupError);
+      if (groupError.code === '23505') {
+        console.warn('Duplicate group name:', groupError);
+        return NextResponse.json(
+          { error: 'A group with this name already exists', code: groupError.code },
+          { status: 409 }
+        );
+      } else if (groupError.code === '42501') {
+        console.error('Permission denied when creating group:', groupError);
+        return NextResponse.json(
+          { error: 'You do not have permission to create groups', code: groupError.code },
+          { status: 403 }
+        );
+      } else if (groupError.code === '23502') {
+        console.error('Missing required field for group:', groupError);
+        return NextResponse.json(
+          { error: 'Missing required field for group creation', code: groupError.code },
+          { status: 400 }
+        );
+      } else {
+        console.error('Error creating group:', groupError);
+        return NextResponse.json(
+          { error: groupError.message || 'Failed to create group', code: groupError.code },
+          { status: 500 }
+        );
+      }
+    }
+    
+    // Sprawdzenie czy grupa została utworzona
+    if (!group) {
+      console.warn('No group data returned after creation');
       return NextResponse.json(
-        { error: 'Failed to create group' },
+        { error: 'Group was created but no data was returned' },
         { status: 500 }
       );
     }
-
+    
     // Dodaj właściciela jako członka grupy
     const { error: memberError } = await supabase
       .from('group_members')
@@ -120,16 +166,26 @@ export async function POST(request) {
       });
 
     if (memberError) {
+      // Logowanie błędu, ale kontynuacja (nie blokujemy całego procesu)
       console.error('Error adding member to group:', memberError);
-      // Grupa została już utworzona, więc zwracamy sukces mimo błędu
-      return NextResponse.json(group);
+      
+      // Jeśli wymagane jest zachowanie spójności, można rozważyć usunięcie grupy
+      if (memberError.code === '23503' || memberError.code === '42501') {
+        console.warn('Rolling back group creation due to member creation failure');
+        await supabase.from('groups').delete().eq('id', group.id);
+        
+        return NextResponse.json(
+          { error: 'Failed to complete group creation process', code: memberError.code },
+          { status: 500 }
+        );
+      }
     }
 
     return NextResponse.json(group);
   } catch (error) {
     console.error('Error in create group API:', error);
     return NextResponse.json(
-      { error: 'An unexpected error occurred' },
+      { error: error.message || 'An unexpected error occurred' },
       { status: 500 }
     );
   }

@@ -39,12 +39,23 @@ export const getUserByAuthId = async (authId) => {
       .eq('external_auth_id', authId)
       .single();
     
-    if (error) throw error;
+    if (error) {
+      if (error.code === 'PGRST116') {
+        // Nie znaleziono - to normalny przypadek, nie musimy logować
+        return null;
+      } else if (error.code === '42501') {
+        console.error('Permission denied when fetching user profile:', error);
+        throw new Error('Permission denied when accessing user profile');
+      } else {
+        console.error('Error fetching user profile:', error);
+        throw new Error(error.message || 'Failed to fetch user profile');
+      }
+    }
     
     return data;
   } catch (error) {
     handleSupabaseError(error);
-    return null;
+    throw error; // Propagujemy błąd, aby wywołujący mógł go obsłużyć
   }
 };
 
@@ -57,12 +68,31 @@ export const createUserProfile = async (userProfile) => {
       .select()
       .single();
     
-    if (error) throw error;
+    if (error) {
+      if (error.code === '23505') {
+        console.warn('Attempt to create duplicate user profile:', error);
+        throw new Error('User profile already exists');
+      } else if (error.code === '42501') {
+        console.error('Permission denied when creating user profile:', error);
+        throw new Error('Permission denied when creating user profile');
+      } else if (error.code === '23502') {
+        console.error('Missing required field for user profile:', error);
+        throw new Error('Missing required field for user profile');
+      } else {
+        console.error('Error creating user profile:', error);
+        throw new Error(error.message || 'Failed to create user profile');
+      }
+    }
+    
+    if (!data) {
+      console.warn('No data returned after user profile creation');
+      throw new Error('User profile may have been created but no data was returned');
+    }
     
     return data;
   } catch (error) {
     handleSupabaseError(error);
-    return null;
+    throw error;
   }
 };
 
