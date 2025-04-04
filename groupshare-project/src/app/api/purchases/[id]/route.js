@@ -45,7 +45,8 @@ export async function GET(request, { params }) {
     }
     
     // Pobierz dane zakupu wraz z powiązanymi informacjami
-    const { data: purchase, error: purchaseError } = await supabase
+    // Zmiana: Użyj supabaseAdmin zamiast supabase, aby ominąć RLS
+    const { data: purchase, error: purchaseError } = await supabaseAdmin
       .from('purchase_records')
       .select(`
         *,

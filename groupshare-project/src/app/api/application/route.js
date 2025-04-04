@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
-import supabase from '@/lib/supabase-client';
+import supabase from '../../../lib/supabase-client';
 
 /**
  * GET /api/applications
@@ -17,13 +17,16 @@ export async function GET(request) {
       );
     }
 
+    // Get auth token
+    const authToken = await user.getToken();
+
     // Pobierz profil użytkownika
     const profileResponse = await fetch(
       `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/profile`,
       {
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${await user.getToken()}`
+          'Authorization': `Bearer ${authToken}` // Add token to the request
         }
       }
     );

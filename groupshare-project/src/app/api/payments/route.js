@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
-import supabase from '@/lib/supabase-client';
-import supabaseAdmin from '@/lib/supabase-admin-client';
+import supabase from '../../../lib/supabase-client';
+import supabaseAdmin from '../../../lib/supabase-admin-client';
 
 /**
  * POST /api/payments
@@ -23,6 +23,9 @@ export async function POST(request) {
     // Pobierz lub utwórz profil użytkownika poprzez dedykowane API
     let userProfileId;
     try {
+      // Get the auth token from the Clerk user
+      const authToken = await user.getToken();
+      
       // Wykorzystanie istniejącego endpointu, który ma odpowiednie uprawnienia
       const profileResponse = await fetch(
         `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/profile`,
@@ -30,7 +33,7 @@ export async function POST(request) {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
-            // Clerk zapewni autentykację
+            'Authorization': `Bearer ${authToken}`  // Add token to the request
           }
         }
       );

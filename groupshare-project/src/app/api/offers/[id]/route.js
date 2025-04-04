@@ -75,12 +75,15 @@ export async function PATCH(request, { params }) {
       );
     }
 
+    // Get auth token
+    const authToken = await user.getToken();
+
     // Get user profile ID from Supabase
     const userProfileResponse = await fetch(
       `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/profile`,
       {
         headers: {
-          'Authorization': `Bearer ${await user.getToken()}`
+          'Authorization': `Bearer ${authToken}` // Add token to the request
         }
       }
     );
@@ -98,7 +101,7 @@ export async function PATCH(request, { params }) {
       `${process.env.NEXT_PUBLIC_APP_URL}/api/groups/${offer.group_id}/members?userId=${userProfile.id}`,
       {
         headers: {
-          'Authorization': `Bearer ${await user.getToken()}`
+          'Authorization': `Bearer ${authToken}` // Add token to the request
         }
       }
     );
@@ -128,7 +131,7 @@ export async function PATCH(request, { params }) {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${await user.getToken()}`
+          'Authorization': `Bearer ${authToken}` // Add token to the request
         },
         body: JSON.stringify(updateData)
       }
@@ -144,7 +147,7 @@ export async function PATCH(request, { params }) {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${await user.getToken()}`
+            'Authorization': `Bearer ${authToken}` // Add token to the request
           },
           body: JSON.stringify({
             groupSubId: id,
@@ -198,12 +201,15 @@ export async function DELETE(request, { params }) {
       );
     }
 
+    // Get auth token
+    const authToken = await user.getToken();
+
     // Get user profile ID from Supabase
     const userProfileResponse = await fetch(
       `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/profile`,
       {
         headers: {
-          'Authorization': `Bearer ${await user.getToken()}`
+          'Authorization': `Bearer ${authToken}` // Add token to the request
         }
       }
     );
@@ -221,7 +227,7 @@ export async function DELETE(request, { params }) {
       `${process.env.NEXT_PUBLIC_APP_URL}/api/groups/${offer.group_id}/members?userId=${userProfile.id}`,
       {
         headers: {
-          'Authorization': `Bearer ${await user.getToken()}`
+          'Authorization': `Bearer ${authToken}` // Add token to the request
         }
       }
     );
@@ -240,7 +246,7 @@ export async function DELETE(request, { params }) {
       {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${await user.getToken()}`
+          'Authorization': `Bearer ${authToken}` // Add token to the request
         }
       }
     );

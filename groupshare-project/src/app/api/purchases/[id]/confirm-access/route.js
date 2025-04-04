@@ -28,6 +28,9 @@ export async function POST(request, { params }) {
       );
     }
     
+    // Get auth token
+    const authToken = await user.getToken();
+    
     // Pobierz profil użytkownika
     let userProfileId;
     try {
@@ -37,7 +40,7 @@ export async function POST(request, { params }) {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
-            // Clerk zapewni autentykację
+            'Authorization': `Bearer ${authToken}` // Add token to the request
           }
         }
       );
