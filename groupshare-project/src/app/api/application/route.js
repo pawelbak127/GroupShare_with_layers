@@ -1,0 +1,90 @@
+import { NextResponse } from 'next/server';
+import { currentUser } from '@clerk/nextjs/server';
+import supabase from '@/lib/supabase-client';
+
+/**
+ * GET /api/applications
+ * Pobiera aplikacje użytkownika
+ */
+export async function GET(request) {
+  try {
+    // Sprawdź autentykację
+    const user = await currentUser();
+    if (!user) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    // Pobierz profil użytkownika
+    const profileResponse = await fetch(
+      `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/profile`,
+      {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${await user.getToken()}`
+        }
+      }
+    );
+
+    if (!profileResponse.ok) {
+      return NextResponse.json(
+        { error: 'Failed to fetch user profile' },
+        { status: profileResponse.status }
+      );
+    }
+
+    const userProfile = await profileResponse.json();
+
+    // Pobierz parametry z URL
+    const { searchParams } = new URL(request.url);
+    const active = searchParams.get('active') === 'true';
+
+    // Zapytanie do bazy danych
+    let query = supabase
+      .from('applications')
+      .select(`
+        *,
+        group_sub:group_subs(
+          id, 
+          price_per_slot,
+          currency,
+          subscription_platforms(id, name, icon)
+        ),
+        seller:group_subs(
+          groups(
+            owner_id, 
+            user_profiles!inner(id, display_name, avatar_url)
+          )
+        )
+      `)
+      .eq('user_id', userProfile.id);
+
+    // Filtruj aktywne aplikacje
+    if (active) {
+      query = query.in('status', ['pending', 'accepted', 'completed']);
+    }
+    
+    // Sortuj
+    query = query.order('created_at', { ascending: false });
+    
+    const { data, error } = await query;
+    
+    if (error) {
+      console.error('Error fetching applications:', error);
+      return NextResponse.json(
+        { error: 'Failed to fetch applications', code: error.code },
+        { status: 500 }
+      );
+    }
+    
+    return NextResponse.json(data || []);
+  } catch (error) {
+    console.error('Error in applications API:', error);
+    return NextResponse.json(
+      { error: 'An unexpected error occurred' },
+      { status: 500 }
+    );
+  }
+}

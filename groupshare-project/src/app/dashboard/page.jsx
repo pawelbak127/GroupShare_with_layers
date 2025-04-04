@@ -2,22 +2,45 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-// Zaktualizowany import - używamy tylko useUser z Clerk
 import { useUser } from '@clerk/nextjs';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 
 export default function Dashboard() {
-  // Użyj useUser zamiast useUserProfile
   const { user, isLoaded } = useUser();
   const [applications, setApplications] = useState([]);
   const [pendingApplications, setPendingApplications] = useState([]);
   const [groups, setGroups] = useState([]);
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [error, setError] = useState(null);
+  const [profileSynced, setProfileSynced] = useState(false);
 
-  // Pobierz dane po załadowaniu profilu
+  // Dodana funkcja do synchronizacji profilu
   useEffect(() => {
     if (!isLoaded || !user) return;
+
+    // Synchronizuj profil przed pobraniem danych
+    const syncUserProfile = async () => {
+      try {
+        console.log("Synchronizacja profilu użytkownika...");
+        const profileRes = await fetch('/api/auth/profile');
+        if (!profileRes.ok) {
+          throw new Error('Failed to sync user profile');
+        }
+        const profileData = await profileRes.json();
+        console.log("Profil zsynchronizowany:", profileData.id);
+        setProfileSynced(true);
+      } catch (err) {
+        console.error('Error syncing user profile:', err);
+        setError('Nie udało się zsynchronizować profilu użytkownika. Odśwież stronę, aby spróbować ponownie.');
+      }
+    };
+
+    syncUserProfile();
+  }, [user, isLoaded]);
+
+  // Pobierz dane po załadowaniu i synchronizacji profilu
+  useEffect(() => {
+    if (!isLoaded || !user || !profileSynced) return;
 
     const fetchDashboardData = async () => {
       setIsLoadingData(true);
@@ -25,7 +48,6 @@ export default function Dashboard() {
 
       try {
         // Pobierz aplikacje użytkownika
-        // Uwaga: te endpointy jeszcze nie istnieją, ale kod czeka na ich stworzenie
         const applicationsRes = await fetch('/api/applications?active=true');
         if (!applicationsRes.ok) throw new Error('Failed to fetch applications');
         const applicationsData = await applicationsRes.json();
@@ -52,7 +74,7 @@ export default function Dashboard() {
     };
 
     fetchDashboardData();
-  }, [user, isLoaded]);
+  }, [user, isLoaded, profileSynced]);
 
   // Wyświetl stan ładowania
   if (!isLoaded || isLoadingData) {

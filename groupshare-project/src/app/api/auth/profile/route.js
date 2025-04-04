@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
-import { getUserByAuthId, createUserProfile } from '@/lib/supabase-client';
+import { getUserByAuthId } from '../../../../lib/supabase-client';
+import supabaseAdmin from '../../../../lib/supabase-admin-client';
 
 /**
  * GET /api/auth/profile
@@ -18,11 +19,14 @@ export async function GET() {
       );
     }
     
+    console.log("Użytkownik Clerk:", user.id);
+    
     // Sprawdź, czy użytkownik ma profil w bazie danych
     const userProfile = await getUserByAuthId(user.id);
     
     // Jeśli profil istnieje, zwróć go
     if (userProfile) {
+      console.log("Znaleziono istniejący profil:", userProfile.id);
       return NextResponse.json(userProfile);
     }
     
@@ -37,23 +41,34 @@ export async function GET() {
       profile_type: 'both', // Domyślna wartość
       verification_level: 'basic', // Domyślna wartość
       bio: '',
-      avatar_url: user.imageUrl || null
+      avatar_url: user.imageUrl || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
     };
     
-    const createdProfile = await createUserProfile(newProfile);
+    console.log("Tworzenie nowego profilu dla użytkownika Clerk:", user.id);
     
-    if (!createdProfile) {
+    // KLUCZOWA ZMIANA: Użyj bezpośrednio supabaseAdmin zamiast createUserProfile
+    const { data: createdProfile, error: createError } = await supabaseAdmin
+      .from('user_profiles')
+      .insert([newProfile])
+      .select()
+      .single();
+    
+    if (createError) {
+      console.error('Error creating user profile with supabaseAdmin:', createError);
       return NextResponse.json(
-        { error: 'Failed to create user profile' },
+        { error: 'Failed to create user profile', details: createError },
         { status: 500 }
       );
     }
     
+    console.log("Utworzono profil:", createdProfile.id);
     return NextResponse.json(createdProfile);
   } catch (error) {
     console.error('Error in profile API:', error);
     return NextResponse.json(
-      { error: 'An unexpected error occurred' },
+      { error: 'An unexpected error occurred', details: error.message },
       { status: 500 }
     );
   }
@@ -97,15 +112,21 @@ export async function PATCH(request) {
       );
     }
     
-    // Aktualizuj profil
-    const updated = await updateUserProfile(userProfile.id, {
-      ...updates,
-      updated_at: new Date().toISOString()
-    });
+    // Aktualizuj profil z supabaseAdmin
+    const { data: updated, error: updateError } = await supabaseAdmin
+      .from('user_profiles')
+      .update({
+        ...updates,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', userProfile.id)
+      .select()
+      .single();
     
-    if (!updated) {
+    if (updateError) {
+      console.error('Error updating profile:', updateError);
       return NextResponse.json(
-        { error: 'Failed to update profile' },
+        { error: 'Failed to update profile', details: updateError },
         { status: 500 }
       );
     }
@@ -114,7 +135,7 @@ export async function PATCH(request) {
   } catch (error) {
     console.error('Error updating profile:', error);
     return NextResponse.json(
-      { error: 'An unexpected error occurred' },
+      { error: 'An unexpected error occurred', details: error.message },
       { status: 500 }
     );
   }

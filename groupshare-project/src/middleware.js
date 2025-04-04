@@ -1,16 +1,31 @@
-import { clerkMiddleware, clerkClient } from "@clerk/nextjs/server";
+import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from 'next/server';
 import { getUserByAuthId } from './lib/supabase-client';
+import supabaseAdmin from './lib/supabase-admin-client';
 
-/**
- * Rozszerzony middleware Clerk z synchronizacją Supabase
- * Zapewnia synchronizację użytkowników między Clerk i Supabase
- */
+// Definicja ścieżek uwierzytelniania Clerk, które powinny być obsługiwane
+const clerkPublicRoutes = [
+  '/',
+  '/sign-in(.*)',
+  '/sign-up(.*)',
+  '/sso-callback(.*)',
+  '/api/auth/(.*)callback',
+];
+
+// Użyj createRouteMatcher do poprawnej obsługi ścieżek Clerk
+const isPublicRoute = createRouteMatcher(clerkPublicRoutes);
+
 export default clerkMiddleware({
-  // Funkcja rozszerzająca standardowe middleware Clerk
   async afterAuth(auth, req, evt) {
     // Pobierz bieżącą ścieżkę z URL
     const path = req.nextUrl.pathname;
+    
+    // Obsługa ścieżek Clerk - dodane by uniknąć 404
+    if (path.includes('catchall_check') || 
+        path.includes('sso-callback') || 
+        isPublicRoute(path)) {
+      return NextResponse.next();
+    }
     
     // Jeśli użytkownik nie jest zalogowany i próbuje uzyskać dostęp do chronionych zasobów
     if (!auth.userId && path.startsWith('/dashboard')) {
@@ -33,21 +48,36 @@ export default clerkMiddleware({
         
         // Jeśli nie ma profilu, a nie jest na ścieżce API do utworzenia profilu
         if (!userProfile && !path.startsWith('/api/auth/profile')) {
-          // Utwórz profil użytkownika przez API
-          const profileResponse = await fetch(
-            `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/profile`,
-            {
-              method: 'GET',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${process.env.SUPABASE_SERVICE_KEY}`
-              }
-            }
-          );
+          console.log(`Tworzenie profilu dla użytkownika ${auth.userId} w middleware`);
           
-          // Jeśli tworzenie profilu się nie powiedzie, zaloguj błąd (ale pozwól użytkownikowi kontynuować)
-          if (!profileResponse.ok) {
-            console.error('Failed to create user profile in middleware:', await profileResponse.text());
+          // Bezpośrednie utworzenie profilu przez supabaseAdmin
+          try {
+            // Pobierz dane uzytkownika z Clerk
+            const clerkUser = auth.user;
+            
+            // Utwórz profil uzytkownika bezpośrednio w Supabase
+            const { data: createdProfile, error: createError } = await supabaseAdmin
+              .from('user_profiles')
+              .insert([{
+                external_auth_id: auth.userId,
+                display_name: clerkUser?.firstName 
+                  ? `${clerkUser.firstName} ${clerkUser.lastName || ''}`.trim() 
+                  : (clerkUser?.username || 'Nowy użytkownik'),
+                email: clerkUser?.emailAddresses[0]?.emailAddress || '',
+                profile_type: 'both', // Domyślna wartość
+                verification_level: 'basic', // Domyślna wartość
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              }])
+              .select();
+            
+            if (createError) {
+              console.error('Błąd przy tworzeniu profilu w middleware:', createError);
+            } else {
+              console.log('Profil użytkownika utworzony pomyślnie:', createdProfile);
+            }
+          } catch (profileError) {
+            console.error('Wyjątek przy tworzeniu profilu użytkownika:', profileError);
           }
         }
       } catch (error) {
@@ -59,7 +89,7 @@ export default clerkMiddleware({
     return NextResponse.next();
   },
   
-  // Publiczne ścieżki, które nie wymagają uwierzytelnienia
+  // Pozostała część middleware pozostaje bez zmian
   publicRoutes: [
     '/',
     '/sign-in(.*)',
@@ -82,7 +112,6 @@ export default clerkMiddleware({
     '/blog/(.*)'
   ],
   
-  // Zabezpiecz wszystkie ścieżki admin
   protectedRoutes: [
     '/dashboard(.*)',
     '/applications(.*)',
@@ -94,7 +123,6 @@ export default clerkMiddleware({
     '/access(.*)'
   ],
   
-  // Ignoruj pliki statyczne
   ignoredRoutes: [
     '/_next/static/(.*)',
     '/favicon.ico',
