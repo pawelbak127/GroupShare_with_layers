@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@clerk/nextjs';
 import { toast } from 'react-hot-toast';
-import LoadingSpinner from '@/components/common/LoadingSpinner';
+import LoadingSpinner from '../../../components/common/LoadingSpinner';
 
 export default function CheckoutPage() {
   const { id } = useParams();

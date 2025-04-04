@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
 import supabase from '../../../../../lib/supabase-client';
+import supabaseAdmin from '../../../../../lib/supabase-admin-client';
 
 /**
  * POST /api/offers/[id]/purchase
@@ -19,34 +20,56 @@ export async function POST(request, { params }) {
       );
     }
     
-    // Pobierz lub utwórz profil użytkownika poprzez dedykowane API
+    console.log("Przetwarzanie zakupu dla użytkownika:", user.id);
+    
+    // Pobierz lub utwórz profil użytkownika BEZPOŚREDNIO
     let userProfileId;
-    try {
-      // Wykorzystanie istniejącego endpointu, który ma odpowiednie uprawnienia
-      const profileResponse = await fetch(
-        `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/profile`,
-        {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            // Wykorzystujemy bieżącą sesję - system Clerk zapewni autentykację
-          }
-        }
-      );
+    
+    // 1. Najpierw spróbuj znaleźć istniejący profil
+    const { data: existingProfile, error: profileError } = await supabaseAdmin
+      .from('user_profiles')
+      .select('id')
+      .eq('external_auth_id', user.id)
+      .single();
+    
+    if (!profileError && existingProfile) {
+      console.log("Znaleziono istniejący profil:", existingProfile.id);
+      userProfileId = existingProfile.id;
+    } else {
+      // 2. Jeśli nie ma profilu, utwórz nowy
+      console.log("Tworzenie nowego profilu dla użytkownika:", user.id);
       
-      if (!profileResponse.ok) {
-        throw new Error(`Failed to fetch user profile: ${profileResponse.status}`);
+      const newProfile = {
+        external_auth_id: user.id,
+        display_name: user.firstName 
+          ? `${user.firstName} ${user.lastName || ''}`.trim() 
+          : (user.username || 'Nowy użytkownik'),
+        email: user.emailAddresses[0]?.emailAddress || '',
+        phone_number: user.phoneNumbers[0]?.phoneNumber || null,
+        profile_type: 'both', // Domyślna wartość
+        verification_level: 'basic', // Domyślna wartość
+        bio: '',
+        avatar_url: user.imageUrl || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      
+      const { data: createdProfile, error: createError } = await supabaseAdmin
+        .from('user_profiles')
+        .insert([newProfile])
+        .select('id')
+        .single();
+      
+      if (createError) {
+        console.error('Error creating user profile:', createError);
+        return NextResponse.json(
+          { error: 'Failed to create user profile', details: createError },
+          { status: 500 }
+        );
       }
       
-      const userProfile = await profileResponse.json();
-      userProfileId = userProfile.id;
-      
-    } catch (error) {
-      console.error('Error fetching or creating user profile:', error);
-      return NextResponse.json(
-        { error: 'Failed to process user profile' },
-        { status: 500 }
-      );
+      console.log("Profil utworzony pomyślnie:", createdProfile.id);
+      userProfileId = createdProfile.id;
     }
     
     // Sprawdź ofertę i dostępność miejsc
@@ -57,15 +80,23 @@ export async function POST(request, { params }) {
       .eq('status', 'active')
       .single();
     
-    if (offerError || !offer || offer.slots_available <= 0) {
+    if (offerError) {
+      console.error('Error fetching offer:', offerError);
+      return NextResponse.json(
+        { error: 'Offer not found', details: offerError },
+        { status: 404 }
+      );
+    }
+    
+    if (!offer || offer.slots_available <= 0) {
       return NextResponse.json(
         { error: 'Offer not available or no slots left' },
         { status: 400 }
       );
     }
     
-    // Utwórz rekord zakupu
-    const { data: purchase, error } = await supabase
+    // Utwórz rekord zakupu używając supabaseAdmin, aby ominąć RLS
+    const { data: purchase, error: purchaseError } = await supabaseAdmin
       .from('purchase_records')
       .insert({
         user_id: userProfileId,
@@ -75,15 +106,20 @@ export async function POST(request, { params }) {
       .select()
       .single();
       
-    if (error) {
-      throw error;
+    if (purchaseError) {
+      console.error('Error creating purchase record:', purchaseError);
+      return NextResponse.json(
+        { error: 'Failed to create purchase record', details: purchaseError },
+        { status: 500 }
+      );
     }
     
+    console.log("Zakup zainicjowany pomyślnie:", purchase.id);
     return NextResponse.json({ purchase }, { status: 201 });
   } catch (error) {
     console.error('Error initiating purchase:', error);
     return NextResponse.json(
-      { error: 'Failed to initiate purchase' },
+      { error: 'Failed to initiate purchase', details: error.message },
       { status: 500 }
     );
   }

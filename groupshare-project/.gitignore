@@ -90,3 +90,6 @@ user-data/
 # Pliki backupów
 *.bak
 *.backup
+
+# clerk configuration (can include secrets)
+/.clerk/
