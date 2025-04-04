@@ -1,4 +1,4 @@
-// src/lib/supabase.js
+// src/lib/supabase-client.js
 import { createClient } from '@supabase/supabase-js';
 
 // Initialize the Supabase client
@@ -122,10 +122,6 @@ export const getSubscriptionOffers = async (filters = {}) => {
       query = query.eq('platform_id', filters.platformId);
     }
     
-    if (filters.instantAccess === true) {
-      query = query.eq('instant_access', true);
-    }
-    
     if (filters.minPrice !== undefined) {
       query = query.gte('price_per_slot', filters.minPrice);
     }
@@ -215,7 +211,6 @@ export const getUserApplications = async (userId, status = null) => {
           id, 
           price_per_slot,
           currency,
-          instant_access,
           subscription_platforms(id, name, icon)
         ),
         seller:group_subs(
@@ -257,7 +252,6 @@ export const getReceivedApplications = async (userId, status = null) => {
           id,
           price_per_slot,
           currency,
-          instant_access,
           groups!inner(
             id,
             name,

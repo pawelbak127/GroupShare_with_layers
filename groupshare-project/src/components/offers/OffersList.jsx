@@ -17,7 +17,6 @@ const OffersList = ({ initialOffers = null, platformId = null }) => {
   const [error, setError] = useState(null);
   const [filters, setFilters] = useState({
     platformId: platformId || '',
-    instantAccess: false,
     minPrice: '',
     maxPrice: '',
     orderBy: 'created_at',
@@ -29,7 +28,6 @@ const OffersList = ({ initialOffers = null, platformId = null }) => {
     // Jeśli mamy początkowe oferty i nie ma filtrów, użyj ich
     if (initialOffers && 
         !filters.platformId && 
-        !filters.instantAccess && 
         !filters.minPrice && 
         !filters.maxPrice) {
       return;
@@ -45,10 +43,6 @@ const OffersList = ({ initialOffers = null, platformId = null }) => {
         
         if (filters.platformId) {
           queryParams.append('platformId', filters.platformId);
-        }
-        
-        if (filters.instantAccess) {
-          queryParams.append('instantAccess', 'true');
         }
         
         if (filters.minPrice) {
@@ -131,7 +125,6 @@ const OffersList = ({ initialOffers = null, platformId = null }) => {
     setError(null);
     setFilters({
       platformId: '',
-      instantAccess: false,
       minPrice: '',
       maxPrice: '',
       orderBy: 'created_at',

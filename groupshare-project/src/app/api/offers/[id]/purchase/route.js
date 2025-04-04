@@ -41,14 +41,6 @@ export async function POST(request, { params }) {
       );
     }
     
-    // Sprawdź, czy oferta ma natychmiastowy dostęp
-    if (!offer.instant_access) {
-      return NextResponse.json(
-        { error: 'This offer does not support instant purchase' },
-        { status: 400 }
-      );
-    }
-    
     // Utwórz rekord zakupu
     const { data: purchase, error } = await supabase
       .from('purchase_records')

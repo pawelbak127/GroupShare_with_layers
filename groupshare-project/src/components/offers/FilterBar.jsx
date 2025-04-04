@@ -42,13 +42,6 @@ const FilterBar = ({ filters, onFilterChange }) => {
     });
   };
 
-  // Handle instant access filter change
-  const handleInstantAccessChange = (e) => {
-    onFilterChange({
-      instantAccess: e.target.checked
-    });
-  };
-
   // Handle price filter changes
   const handlePriceChange = (type, e) => {
     const value = e.target.value;
@@ -85,7 +78,6 @@ const FilterBar = ({ filters, onFilterChange }) => {
   const clearFilters = () => {
     onFilterChange({
       platformId: '',
-      instantAccess: false,
       minPrice: '',
       maxPrice: '',
       orderBy: 'created_at',
@@ -134,20 +126,6 @@ const FilterBar = ({ filters, onFilterChange }) => {
               </option>
             ))}
           </select>
-        </div>
-
-        {/* Instant Access filter - always visible */}
-        <div className="w-full md:w-auto flex items-center">
-          <input
-            id="instantAccess"
-            type="checkbox"
-            className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-            checked={filters.instantAccess}
-            onChange={handleInstantAccessChange}
-          />
-          <label htmlFor="instantAccess" className="ml-2 text-sm text-gray-700">
-            Tylko z natychmiastowym dostępem
-          </label>
         </div>
 
         {/* Toggle button for more filters */}

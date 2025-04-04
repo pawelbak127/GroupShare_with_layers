@@ -70,12 +70,13 @@ export default function CheckoutPage() {
       
       const paymentData = await response.json();
       
-      // W nowym modelu, przekierowujemy bezpośrednio do strony z instrukcjami dostępu
+      // Przekieruj do strony z instrukcjami dostępu
       if (paymentData.accessUrl) {
         window.location.href = paymentData.accessUrl;
       } else {
-        // Przekieruj do zewnętrznego procesora płatności
-        window.location.href = paymentData.payment_url;
+        // Fallback - przekieruj do dashboardu w przypadku problemu z URL dostępu
+        toast.success('Płatność zrealizowana pomyślnie!');
+        router.push('/dashboard');
       }
     } catch (error) {
       console.error('Payment error:', error);

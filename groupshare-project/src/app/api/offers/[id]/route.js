@@ -118,7 +118,7 @@ export async function PATCH(request, { params }) {
       slots_total: updates.slotsTotal || offer.slots_total,
       slots_available: updates.slotsAvailable !== undefined ? updates.slotsAvailable : offer.slots_available,
       currency: updates.currency || offer.currency,
-      instant_access: updates.instantAccess !== undefined ? updates.instantAccess : offer.instant_access
+      instant_access: true // Zawsze true w nowym modelu
     };
 
     // Update offer in Supabase
@@ -136,8 +136,8 @@ export async function PATCH(request, { params }) {
 
     const updatedOffer = await response.json();
 
-    // If instant access settings changed and instructions provided, update them
-    if (updates.instantAccess && updates.accessInstructions) {
+    // If access instructions provided, update them
+    if (updates.accessInstructions) {
       await fetch(
         `${process.env.NEXT_PUBLIC_APP_URL}/api/access-instructions`,
         {

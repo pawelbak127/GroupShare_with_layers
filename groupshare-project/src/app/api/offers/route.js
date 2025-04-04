@@ -16,7 +16,6 @@ export async function GET(request) {
     // Parse filters from query parameters
     const filters = {
       platformId: searchParams.get('platformId') || undefined,
-      instantAccess: searchParams.get('instantAccess') === 'true',
       minPrice: searchParams.get('minPrice') ? parseFloat(searchParams.get('minPrice')) : undefined,
       maxPrice: searchParams.get('maxPrice') ? parseFloat(searchParams.get('maxPrice')) : undefined,
       availableSlots: searchParams.get('availableSlots') !== 'false', // Default to true
@@ -59,7 +58,7 @@ export async function POST(request) {
     const body = await request.json();
     
     // Validate required fields
-    const requiredFields = ['groupId', 'platformId', 'slotsTotal', 'pricePerSlot'];
+    const requiredFields = ['groupId', 'platformId', 'slotsTotal', 'pricePerSlot', 'accessInstructions'];
     for (const field of requiredFields) {
       if (!body[field]) {
         return NextResponse.json(
@@ -114,7 +113,7 @@ export async function POST(request) {
       slots_available: body.slotsTotal, // Initially all slots are available
       price_per_slot: body.pricePerSlot,
       currency: body.currency || 'PLN',
-      instant_access: body.instantAccess || false
+      instant_access: true // Wszystkie oferty mają teraz natychmiastowy dostęp
     };
     
     // Create offer in Supabase
@@ -132,24 +131,21 @@ export async function POST(request) {
     
     const createdOffer = await response.json();
     
-    // If instant access is enabled, store access instructions
-    if (body.instantAccess && body.accessInstructions) {
-      // Store access instructions in Supabase
-      await fetch(
-        `${process.env.NEXT_PUBLIC_APP_URL}/api/access-instructions`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${await user.getToken()}`
-          },
-          body: JSON.stringify({
-            groupSubId: createdOffer.id,
-            instructions: body.accessInstructions
-          })
-        }
-      );
-    }
+    // Store access instructions in Supabase (zawsze dla wszystkich ofert)
+    await fetch(
+      `${process.env.NEXT_PUBLIC_APP_URL}/api/access-instructions`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await user.getToken()}`
+        },
+        body: JSON.stringify({
+          groupSubId: createdOffer.id,
+          instructions: body.accessInstructions
+        })
+      }
+    );
     
     return NextResponse.json(createdOffer, { status: 201 });
   } catch (error) {

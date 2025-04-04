@@ -63,7 +63,7 @@ const InstructionForm = ({ groupSubId, onSuccess }) => {
           Instrukcje dostępowe
         </label>
         <div className="text-xs text-gray-500 mb-2">
-          Wprowadź szczegółowe instrukcje, jak uzyskać dostęp do subskrypcji. Instrukcje zostaną zaszyfrowane i będą dostępne tylko dla zatwierdzonych użytkowników.
+          Wprowadź szczegółowe instrukcje, jak uzyskać dostęp do subskrypcji. Instrukcje zostaną zaszyfrowane i będą automatycznie dostępne dla kupujących po dokonaniu płatności.
         </div>
         <textarea
           id="instructions"
@@ -88,7 +88,7 @@ const InstructionForm = ({ groupSubId, onSuccess }) => {
           <div className="ml-3">
             <h3 className="text-sm font-medium text-yellow-800">Ważna informacja o bezpieczeństwie</h3>
             <div className="mt-1 text-xs text-yellow-700">
-              Wprowadzone dane zostaną zaszyfrowane i będą widoczne tylko dla zatwierdzonych użytkowników. Nie będziemy przechowywać ich w formie niezaszyfrowanej.
+              Wprowadzone dane zostaną zaszyfrowane i będą widoczne tylko dla zatwierdzonych użytkowników, którzy dokonali płatności. Nie będziemy przechowywać ich w formie niezaszyfrowanej.
             </div>
           </div>
         </div>
