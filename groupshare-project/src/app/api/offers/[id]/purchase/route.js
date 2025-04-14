@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
-import supabase from '../../../../../lib/supabase-client';
-import supabaseAdmin from '../../../../../lib/supabase-admin-client';
+import supabaseAdmin from '@/lib/supabase-admin-client';
 
 /**
  * POST /api/offers/[id]/purchase
@@ -72,8 +71,8 @@ export async function POST(request, { params }) {
       userProfileId = createdProfile.id;
     }
     
-    // Sprawdź ofertę i dostępność miejsc
-    const { data: offer, error: offerError } = await supabase
+    // Sprawdź ofertę i dostępność miejsc - używaj supabaseAdmin
+    const { data: offer, error: offerError } = await supabaseAdmin
       .from('group_subs')
       .select('*')
       .eq('id', id)
@@ -113,6 +112,21 @@ export async function POST(request, { params }) {
         { status: 500 }
       );
     }
+    
+    // Zaloguj operację w security_logs
+    await supabaseAdmin
+      .from('security_logs')
+      .insert({
+        user_id: userProfileId,
+        action_type: 'purchase_initiated',
+        resource_type: 'group_sub',
+        resource_id: id,
+        status: 'success',
+        details: {
+          purchase_id: purchase.id,
+          timestamp: new Date().toISOString()
+        }
+      });
     
     console.log("Zakup zainicjowany pomyślnie:", purchase.id);
     return NextResponse.json({ purchase }, { status: 201 });

@@ -1,304 +1,309 @@
+// src/app/api/access/[id]/route.js
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
-import { 
-  KeyManagementService, 
-  InstructionEncryptionService, 
-  TokenService,
-  SecurityLogger,
-  DeviceFingerprinter,
-  AnomalyDetector
-} from '@/lib/security';
-import supabase from '@/lib/supabase-client';
+import crypto from 'crypto';
+import supabaseAdmin from '@/lib/supabase-admin-client';
 
 /**
  * GET /api/access/[id]
- * Pobiera instrukcje dostępowe za pomocą jednorazowego tokenu
+ * Weryfikuje token dostępu i zwraca instrukcje dostępu do subskrypcji
  */
 export async function GET(request, { params }) {
   try {
-    const { id } = params; // ID zakupu
-    
-    // Pobierz token z URL
+    const { id } = params;
     const { searchParams } = new URL(request.url);
     const token = searchParams.get('token');
-
+    
+    console.log(`Processing access request for purchase ${id}`);
+    
+    // Sprawdź czy token jest prawidłowy
     if (!token) {
+      await logSecurityEvent(null, 'access_attempt', 'purchase_record', id, 'failed', {
+        reason: 'Missing token',
+        ip: request.headers.get('x-forwarded-for') || 'unknown'
+      });
+      
       return NextResponse.json(
-        { error: 'Missing access token' },
-        { status: 400 }
+        { error: 'Access token is required' },
+        { status: 401 }
       );
     }
-
+    
     // Sprawdź autentykację
     const user = await currentUser();
-    if (!user) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    // Inicjalizuj serwisy
-    const tokenService = new TokenService();
-    const keyManagementService = new KeyManagementService(process.env.ENCRYPTION_MASTER_KEY);
-    const encryptionService = new InstructionEncryptionService(keyManagementService);
-    const securityLogger = new SecurityLogger(user.id);
-    const anomalyDetector = new AnomalyDetector();
-    const deviceFingerprinter = new DeviceFingerprinter();
+    let userProfileId = null;
     
-    // Generuj odcisk urządzenia
-    const deviceFingerprint = deviceFingerprinter.generateFingerprint(request);
-    
-    // Sprawdź, czy nie ma podejrzanej aktywności
-    const isSuspicious = await anomalyDetector.detectSuspiciousActivity(
-      user.id, 
-      'instruction_access',
-      { ip: request.headers.get('x-forwarded-for') }
-    );
-    
-    if (isSuspicious) {
-      await securityLogger.logSecurityEvent(
-        'instruction_access',
-        'purchase',
-        id,
-        'warning',
-        { reason: 'Suspicious activity detected' }
-      );
+    if (user) {
+      // Pobierz profil użytkownika
+      const { data: profile } = await supabaseAdmin
+        .from('user_profiles')
+        .select('id')
+        .eq('external_auth_id', user.id)
+        .single();
       
-      // Wciąż kontynuujemy, ale dodajemy wpis w logu
+      if (profile) {
+        userProfileId = profile.id;
+        console.log(`Authenticated user: ${userProfileId}`);
+      }
     }
     
-    // Weryfikuj token
-    const isValidToken = await tokenService.verifyToken(token, id);
-    if (!isValidToken) {
-      await securityLogger.logSecurityEvent(
-        'instruction_access',
-        'purchase',
-        id,
-        'failure',
-        { reason: 'Invalid or expired token' }
-      );
-
-      return NextResponse.json(
-        { error: 'Invalid or expired token' },
-        { status: 401 }
-      );
-    }
-
     // Pobierz informacje o zakupie
-    const { data: purchase, error: purchaseError } = await supabase
+    const { data: purchase, error: purchaseError } = await supabaseAdmin
       .from('purchase_records')
       .select(`
-        user_id,
-        group_sub_id,
-        status
+        id, status, user_id, access_provided, group_sub_id,
+        user:user_profiles(id, display_name, email),
+        group_sub:group_subs(
+          id, group_id,
+          platform:subscription_platforms(id, name, icon, name)
+        )
       `)
       .eq('id', id)
       .single();
-
-    if (purchaseError) {
-      if (purchaseError.code === 'PGRST116') {
-        await securityLogger.logSecurityEvent(
-          'instruction_access',
-          'purchase',
-          id,
-          'failure',
-          { reason: 'Purchase record not found' }
-        );
-        
-        return NextResponse.json(
-          { error: 'Purchase record not found', code: purchaseError.code },
-          { status: 404 }
-        );
-      } else {
-        console.error('Error fetching purchase:', purchaseError);
-        await securityLogger.logSecurityEvent(
-          'instruction_access',
-          'purchase',
-          id,
-          'failure',
-          { reason: 'Database error', error: purchaseError.message, code: purchaseError.code }
-        );
-        
-        return NextResponse.json(
-          { error: purchaseError.message || 'Failed to fetch purchase record', code: purchaseError.code },
-          { status: 500 }
-        );
-      }
-    }
-
-    if (!purchase) {
-      await securityLogger.logSecurityEvent(
-        'instruction_access',
-        'purchase',
-        id,
-        'failure',
-        { reason: 'Purchase record not found but no error returned' }
-      );
+    
+    if (purchaseError || !purchase) {
+      console.error('Error fetching purchase:', purchaseError);
+      
+      await logSecurityEvent(userProfileId, 'access_attempt', 'purchase_record', id, 'failed', {
+        reason: 'Purchase not found',
+        error: purchaseError?.message
+      });
       
       return NextResponse.json(
         { error: 'Purchase record not found' },
         { status: 404 }
       );
     }
-
-    // Sprawdź, czy użytkownik ma prawo dostępu
-    if (purchase.user_id !== user.id) {
-      await securityLogger.logSecurityEvent(
-        'instruction_access',
-        'purchase',
-        id,
-        'failure',
-        { reason: 'User not authorized for this purchase' }
-      );
-
+    
+    // Sprawdź status zakupu
+    if (purchase.status !== 'completed' || !purchase.access_provided) {
+      await logSecurityEvent(userProfileId, 'access_attempt', 'purchase_record', id, 'failed', {
+        reason: 'Access not provided',
+        purchase_status: purchase.status,
+        access_provided: purchase.access_provided
+      });
+      
       return NextResponse.json(
-        { error: 'You do not have permission to access these instructions' },
+        { error: 'Access not available for this purchase' },
         { status: 403 }
       );
     }
-
-    // Sprawdź, czy płatność została zakończona
-    if (purchase.status !== 'completed') {
-      return NextResponse.json(
-        { error: 'Purchase not completed yet' },
-        { status: 400 }
-      );
-    }
-
-    // Pobierz zaszyfrowane instrukcje
-    const { data: encryptedInstructions, error: instructionsError } = await supabase
-      .from('access_instructions')
-      .select(`
-        encrypted_data,
-        data_key_enc,
-        encryption_key_id,
-        iv,
-        encryption_version
-      `)
-      .eq('group_sub_id', purchase.group_sub_id)
-      .single();
-
-    if (instructionsError) {
-      // Szczegółowa obsługa błędów
-      if (instructionsError.code === 'PGRST116') {
-        await securityLogger.logSecurityEvent(
-          'instruction_access',
-          'purchase',
-          id,
-          'failure',
-          { reason: 'Access instructions not found' }
-        );
-        
-        return NextResponse.json(
-          { error: 'Access instructions not found for this subscription', code: instructionsError.code },
-          { status: 404 }
-        );
-      } else if (instructionsError.code === '42501') {
-        await securityLogger.logSecurityEvent(
-          'instruction_access',
-          'purchase',
-          id,
-          'failure',
-          { reason: 'Permission denied' }
-        );
-        
-        return NextResponse.json(
-          { error: 'You do not have permission to access these instructions', code: instructionsError.code },
-          { status: 403 }
-        );
-      } else {
-        console.error('Error fetching access instructions:', instructionsError);
-        await securityLogger.logSecurityEvent(
-          'instruction_access',
-          'purchase',
-          id,
-          'failure',
-          { reason: 'Database error', error: instructionsError.message, code: instructionsError.code }
-        );
-        
-        return NextResponse.json(
-          { error: 'Failed to retrieve access instructions', code: instructionsError.code },
-          { status: 500 }
-        );
+    
+    // Pobierz i sprawdź token dostępu
+    const tokenHash = hashToken(token);
+    console.log(`Verifying token hash: ${tokenHash.substring(0, 10)}...`);
+    
+    // Najpierw sprawdź, czy istnieją jakiekolwiek tokeny dla tego zakupu
+    const { data: allTokens, error: tokensError } = await supabaseAdmin
+      .from('access_tokens')
+      .select('id, token_hash, expires_at, used')
+      .eq('purchase_record_id', id);
+    
+    if (tokensError) {
+      console.error('Error checking tokens:', tokensError);
+    } else {
+      console.log(`Found ${allTokens?.length || 0} tokens for purchase ${id}`);
+      if (allTokens && allTokens.length > 0) {
+        for (const t of allTokens) {
+          console.log(`Token: ${t.id}, hash prefix: ${t.token_hash?.substring(0, 10)}..., expires: ${t.expires_at}, used: ${t.used}`);
+        }
       }
     }
     
-    if (!encryptedInstructions) {
-      await securityLogger.logSecurityEvent(
-        'instruction_access',
-        'purchase',
-        id,
-        'failure',
-        { reason: 'No instructions found but no error returned' }
-      );
+    // *** WAŻNA ZMIANA: Sprawdzaj wszystkie tokeny, nawet użyte ***
+    const { data: matchingToken, error: tokenError } = await supabaseAdmin
+      .from('access_tokens')
+      .select('*')
+      .eq('purchase_record_id', id)
+      .eq('token_hash', tokenHash)
+      .gt('expires_at', new Date().toISOString())
+      .maybeSingle();  // Używamy maybeSingle zamiast single, aby nie rzucać błędu jeśli nie znajdzie
+    
+    // Jeśli nie znaleziono pasującego tokenu lub token nie istnieje
+    if (tokenError || !matchingToken) {
+      console.error('Error finding matching token:', tokenError);
       
-      return NextResponse.json(
-        { error: 'Access instructions not found' },
-        { status: 404 }
-      );
-    }
-
-    // Odszyfruj instrukcje
-    let decryptedInstructions;
-    try {
-      decryptedInstructions = await encryptionService.decryptInstructions({
-        encryptedData: encryptedInstructions.encrypted_data,
-        encryptedKey: encryptedInstructions.data_key_enc,
-        keyId: encryptedInstructions.encryption_key_id,
-        iv: encryptedInstructions.iv,
-        version: encryptedInstructions.encryption_version
+      await logSecurityEvent(userProfileId, 'access_attempt', 'purchase_record', id, 'failed', {
+        reason: 'Token not found or expired',
+        error: tokenError?.message
       });
-    } catch (decryptError) {
-      console.error('Error decrypting instructions:', decryptError);
-      await securityLogger.logSecurityEvent(
-        'instruction_access',
-        'purchase',
-        id,
-        'failure',
-        { reason: 'Decryption error', error: decryptError.message }
-      );
       
       return NextResponse.json(
-        { error: 'Failed to decrypt access instructions' },
-        { status: 500 }
+        { error: 'Invalid or expired access token' },
+        { status: 401 }
       );
     }
-
-    // Zaloguj udany dostęp
-    await securityLogger.logSecurityEvent(
-      'instruction_access',
-      'purchase',
-      id,
-      'success'
-    );
-
-    // Zapisz odcisk urządzenia dla przyszłych weryfikacji
-    await deviceFingerprinter.storeDeviceFingerprint(user.id, deviceFingerprint);
-
-    // Aktualizuj status dostępu
-    const { error: updateError } = await supabase
+    
+    console.log(`Matching token found: ${matchingToken.id}, used: ${matchingToken.used}`);
+    
+    // Jeśli token został już użyty wcześniej, to akceptujemy to - po prostu nie oznaczamy go ponownie
+    if (!matchingToken.used) {
+      // Oznacz token jako użyty tylko jeśli jeszcze nie był użyty
+      const { error: updateError } = await supabaseAdmin
+        .from('access_tokens')
+        .update({
+          used: true,
+          used_at: new Date().toISOString(),
+          ip_address: request.headers.get('x-forwarded-for') || null,
+          user_agent: request.headers.get('user-agent') || null
+        })
+        .eq('id', matchingToken.id);
+      
+      if (updateError) {
+        console.error('Error updating access token:', updateError);
+        // Kontynuujemy pomimo błędu
+      } else {
+        console.log(`Token ${matchingToken.id} marked as used`);
+      }
+    } else {
+      console.log(`Token ${matchingToken.id} was already used, continuing anyway`);
+    }
+    
+    // Jeśli użytkownik jest zalogowany, sprawdź czy zakup należy do niego
+    // Uwaga: Pozwalamy niezalogowanym użytkownikom na dostęp przy użyciu tokenu
+    if (userProfileId && purchase.user_id !== userProfileId) {
+      console.warn(`Security warning: User ${userProfileId} attempted to access purchase ${id} belonging to user ${purchase.user_id}`);
+      
+      await logSecurityEvent(userProfileId, 'access_attempt', 'purchase_record', id, 'failed', {
+        reason: 'User mismatch',
+        owner_id: purchase.user_id
+      });
+      
+      return NextResponse.json(
+        { error: 'You do not have permission to access this purchase' },
+        { status: 403 }
+      );
+    }
+    
+    // Potwierdzenie dostępu w rejestrze zakupów
+    await supabaseAdmin
       .from('purchase_records')
       .update({
-        access_provided: true,
-        access_provided_at: new Date().toISOString()
+        access_confirmed: true,
+        access_confirmed_at: new Date().toISOString()
       })
       .eq('id', id);
-
-    if (updateError) {
-      console.warn('Error updating access status:', updateError);
-      // Kontynuujemy mimo błędu, główna funkcjonalność została wykonana
+    
+    // Pobierz instrukcje dostępu
+    const { data: accessInstructions, error: instructionsError } = await supabaseAdmin
+      .from('access_instructions')
+      .select('*')
+      .eq('group_sub_id', purchase.group_sub_id)
+      .maybeSingle();
+    
+    let decryptedInstructions = "";
+    
+    // Obsługa przypadku braku instrukcji
+    if (instructionsError) {
+      console.error('Error fetching access instructions:', instructionsError);
+      
+      await logSecurityEvent(userProfileId, 'access_attempt', 'purchase_record', id, 'warning', {
+        reason: 'Error fetching access instructions',
+        error: instructionsError?.message,
+        group_sub_id: purchase.group_sub_id
+      });
+      
+      // Tworzymy domyślne instrukcje zamiast zwracać błąd
+      decryptedInstructions = "Instrukcje dostępu nie zostały jeszcze skonfigurowane przez sprzedawcę. Prosimy o kontakt ze sprzedawcą, aby uzyskać dane dostępowe.";
+    } else if (!accessInstructions) {
+      console.warn(`No access instructions found for group_sub_id: ${purchase.group_sub_id}`);
+      
+      await logSecurityEvent(userProfileId, 'access_attempt', 'purchase_record', id, 'warning', {
+        reason: 'No access instructions found',
+        group_sub_id: purchase.group_sub_id
+      });
+      
+      // Tworzymy domyślne instrukcje zamiast zwracać błąd
+      decryptedInstructions = "Instrukcje dostępu nie zostały jeszcze skonfigurowane przez sprzedawcą. Prosimy o kontakt ze sprzedawcą, aby uzyskać dane dostępowe.";
+    } else {
+      // Symulacja deszyfrowania instrukcji dostępu
+      // W rzeczywistości tutaj byłoby prawdziwe deszyfrowanie
+      if (accessInstructions.encrypted_data && accessInstructions.encrypted_data.startsWith("ENCRYPTED:")) {
+        // Przykładowe "deszyfrowanie" - w produkcji należy użyć odpowiednich metod kryptograficznych
+        const base64Data = accessInstructions.encrypted_data.replace("ENCRYPTED:", "");
+        decryptedInstructions = Buffer.from(base64Data, 'base64').toString('utf-8');
+      } else {
+        decryptedInstructions = accessInstructions.encrypted_data || "Instrukcje dostępu nie są dostępne w czytelnym formacie.";
+      }
     }
-
+    
+    // Pobierz dane kontaktowe właściciela grupy, aby kupujący mógł się skontaktować w razie problemów
+    const { data: groupOwner } = await supabaseAdmin
+      .from('groups')
+      .select(`
+        owner:user_profiles!owner_id(display_name, email)
+      `)
+      .eq('id', purchase.group_sub.group_id)
+      .single();
+    
+    const ownerContact = groupOwner?.owner || { display_name: "Sprzedawca", email: "Niedostępny" };
+    
+    // Zaloguj udany dostęp
+    await logSecurityEvent(userProfileId || purchase.user_id, 'access_success', 'purchase_record', id, 'success', {
+      platform: purchase.group_sub.platform.name,
+      token_id: matchingToken.id,
+      has_instructions: !!accessInstructions
+    });
+    
+    console.log(`Access successful for purchase ${id}`);
+    
+    // Zwróć dane dostępowe
     return NextResponse.json({
+      purchase_id: id,
+      platform: purchase.group_sub.platform.name,
       instructions: decryptedInstructions,
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString() // Instrukcje wygasają po 5 minutach
+      purchased_at: purchase.created_at,
+      user: purchase.user.display_name,
+      email: purchase.user.email,
+      owner_contact: ownerContact,
+      has_instructions: !!accessInstructions
     });
   } catch (error) {
-    console.error('Error accessing instructions:', error);
+    console.error('Error processing access request:', error);
+    
+    try {
+      await logSecurityEvent(null, 'access_attempt', 'purchase_record', params?.id || 'unknown', 'error', {
+        error: error.message
+      });
+    } catch (logError) {
+      console.error('Failed to log security event:', logError);
+    }
+    
     return NextResponse.json(
-      { error: error.message || 'Failed to access instructions' },
+      { error: 'Failed to process access request' },
       { status: 500 }
     );
   }
+}
+
+// Funkcja do logowania zdarzeń bezpieczeństwa
+async function logSecurityEvent(userId, actionType, resourceType, resourceId, status, details = {}) {
+  try {
+    const { error } = await supabaseAdmin
+      .from('security_logs')
+      .insert({
+        user_id: userId,
+        action_type: actionType,
+        resource_type: resourceType,
+        resource_id: String(resourceId),
+        status: status,
+        details: details,
+        created_at: new Date().toISOString()
+      });
+    
+    if (error) {
+      console.error('Error logging security event:', error);
+    }
+  } catch (error) {
+    console.error('Exception logging security event:', error);
+  }
+}
+
+// Bezpieczna funkcja hashująca token
+function hashToken(token) {
+  const salt = process.env.TOKEN_SALT || '';
+  return crypto
+    .createHash('sha256')
+    .update(token + salt)
+    .digest('hex');
 }

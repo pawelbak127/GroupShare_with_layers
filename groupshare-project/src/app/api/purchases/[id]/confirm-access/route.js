@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
-import supabase from '@/lib/supabase-client';
 import supabaseAdmin from '@/lib/supabase-admin-client';
 
 /**
@@ -28,45 +27,35 @@ export async function POST(request, { params }) {
       );
     }
     
-    // Get auth token
-    const authToken = await user.getToken();
+    console.log(`Processing access confirmation for purchase ${id}, user: ${user.id}, isWorking: ${isWorking}`);
     
-    // Pobierz profil użytkownika
-    let userProfileId;
-    try {
-      const profileResponse = await fetch(
-        `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/profile`,
-        {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${authToken}` // Add token to the request
-          }
-        }
-      );
-      
-      if (!profileResponse.ok) {
-        throw new Error(`Failed to fetch user profile: ${profileResponse.status}`);
-      }
-      
-      const userProfile = await profileResponse.json();
-      userProfileId = userProfile.id;
-    } catch (error) {
-      console.error('Error fetching user profile:', error);
+    // Pobierz profil użytkownika bezpośrednio z supabaseAdmin
+    const { data: userProfile, error: profileError } = await supabaseAdmin
+      .from('user_profiles')
+      .select('id')
+      .eq('external_auth_id', user.id)
+      .single();
+    
+    if (profileError || !userProfile) {
+      console.error('Error fetching user profile:', profileError);
       return NextResponse.json(
-        { error: 'Failed to verify user profile' },
-        { status: 500 }
+        { error: 'User profile not found', details: profileError },
+        { status: 404 }
       );
     }
     
+    const userProfileId = userProfile.id;
+    console.log(`Found user profile: ${userProfileId}`);
+    
     // Pobierz informacje o zakupie
-    const { data: purchase, error: purchaseError } = await supabase
+    const { data: purchase, error: purchaseError } = await supabaseAdmin
       .from('purchase_records')
       .select(`
         id,
         user_id,
         group_sub_id,
         group_sub:group_subs(
+          group_id,
           groups(owner_id)
         ),
         status,
@@ -75,30 +64,10 @@ export async function POST(request, { params }) {
       .eq('id', id)
       .single();
     
-    if (purchaseError) {
-      if (purchaseError.code === 'PGRST116') {
-        return NextResponse.json(
-          { error: 'Purchase record not found', code: purchaseError.code },
-          { status: 404 }
-        );
-      } else if (purchaseError.code === '42501') {
-        console.error('Permission denied when fetching purchase record:', purchaseError);
-        return NextResponse.json(
-          { error: 'You do not have permission to access this purchase record', code: purchaseError.code },
-          { status: 403 }
-        );
-      } else {
-        console.error('Error fetching purchase record:', purchaseError);
-        return NextResponse.json(
-          { error: purchaseError.message || 'Failed to fetch purchase record', code: purchaseError.code },
-          { status: 500 }
-        );
-      }
-    }
-    
-    if (!purchase) {
+    if (purchaseError || !purchase) {
+      console.error('Error fetching purchase record:', purchaseError);
       return NextResponse.json(
-        { error: 'Purchase record not found' },
+        { error: 'Purchase record not found', details: purchaseError },
         { status: 404 }
       );
     }
@@ -121,7 +90,7 @@ export async function POST(request, { params }) {
     }
     
     // Aktualizuj status potwierdzenia
-    const { data: updateData, error: updateError } = await supabase
+    const { data: updateData, error: updateError } = await supabaseAdmin
       .from('purchase_records')
       .update({
         access_confirmed: true,
@@ -131,40 +100,19 @@ export async function POST(request, { params }) {
       .select();
     
     if (updateError) {
-      if (updateError.code === '42501') {
-        console.error('Permission denied when confirming access:', updateError);
-        return NextResponse.json(
-          { error: 'You do not have permission to confirm this access', code: updateError.code },
-          { status: 403 }
-        );
-      } else if (updateError.code === 'PGRST116') {
-        console.error('Purchase record not found during confirmation:', updateError);
-        return NextResponse.json(
-          { error: 'Purchase record not found', code: updateError.code },
-          { status: 404 }
-        );
-      } else {
-        console.error('Error confirming access:', updateError);
-        return NextResponse.json(
-          { error: updateError.message || 'Failed to confirm access', code: updateError.code },
-          { status: 500 }
-        );
-      }
-    }
-    
-    // Sprawdzenie czy dane zostały zaktualizowane
-    if (!updateData || updateData.length === 0) {
-      console.warn('No data returned after confirming access');
+      console.error('Error confirming access:', updateError);
       return NextResponse.json(
-        { error: 'Access confirmation may have failed' },
+        { error: 'Failed to confirm access', details: updateError },
         { status: 500 }
       );
     }
     
+    console.log(`Access confirmation updated for purchase ${id}`);
+    
     // Jeśli dostęp nie działa, utwórz spór
     if (!isWorking) {
       // Pobierz powiązaną transakcję
-      const { data: transactionData, error: transactionError } = await supabase
+      const { data: transactionData, error: transactionError } = await supabaseAdmin
         .from('transactions')
         .select('id')
         .eq('purchase_record_id', id)
@@ -176,26 +124,27 @@ export async function POST(request, { params }) {
       }
       
       const transactionId = transactionData?.id;
+      const groupSubId = purchase.group_sub_id;
+      const sellerId = purchase.group_sub?.groups?.owner_id;
       
-      if (!transactionId) {
-        console.warn(`No transaction found for purchase ${id}`);
-        // Utworzenie sporu bez ID transakcji
-      }
+      console.log(`Creating dispute for purchase ${id}, transaction ${transactionId}`);
       
       try {
-        // Używamy supabaseAdmin aby ominąć RLS
+        // Utwórz spór
         const { data: dispute, error: disputeError } = await supabaseAdmin
           .from('disputes')
           .insert({
             reporter_id: userProfileId,
             reported_entity_type: 'subscription',
-            reported_entity_id: purchase.group_sub_id,
+            reported_entity_id: groupSubId,
             transaction_id: transactionId,
             dispute_type: 'access',
             description: 'Automatyczne zgłoszenie: problem z dostępem do subskrypcji',
             status: 'open',
             evidence_required: true,
-            resolution_deadline: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString() // 3 dni
+            resolution_deadline: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(), // 3 dni
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
           })
           .select()
           .single();
@@ -205,18 +154,12 @@ export async function POST(request, { params }) {
           return NextResponse.json({
             message: 'Access confirmation successful, but failed to create dispute record',
             confirmed: true,
-            disputeCreated: false
+            disputeCreated: false,
+            details: disputeError
           });
         }
         
-        if (!dispute) {
-          console.warn('No dispute data returned after creation');
-          return NextResponse.json({
-            message: 'Access confirmation successful, but dispute record may not have been created',
-            confirmed: true,
-            disputeCreated: false
-          });
-        }
+        console.log(`Created dispute ${dispute.id}`);
         
         // Powiadom kupującego
         await createNotification(
@@ -229,14 +172,16 @@ export async function POST(request, { params }) {
         );
         
         // Powiadom sprzedającego
-        await createNotification(
-          purchase.group_sub.groups.owner_id,
-          'dispute_filed',
-          'Zgłoszono problem z dostępem',
-          'Kupujący zgłosił problem z dostępem do Twojej subskrypcji. Prosimy o pilną weryfikację.',
-          'dispute',
-          dispute.id
-        );
+        if (sellerId) {
+          await createNotification(
+            sellerId,
+            'dispute_filed',
+            'Zgłoszono problem z dostępem',
+            'Kupujący zgłosił problem z dostępem do Twojej subskrypcji. Prosimy o pilną weryfikację.',
+            'dispute',
+            dispute.id
+          );
+        }
         
         return NextResponse.json({
           message: 'Access confirmation and dispute filed successfully',
@@ -256,6 +201,10 @@ export async function POST(request, { params }) {
     }
     
     // Jeśli dostęp działa poprawnie
+    await logSecurityEvent(userProfileId, 'access_confirmation', 'purchase_record', id, 'success', {
+      isWorking: isWorking
+    });
+    
     return NextResponse.json({
       message: 'Access confirmed successfully',
       confirmed: true
@@ -290,7 +239,7 @@ async function createNotification(
         related_entity_type: relatedEntityType,
         related_entity_id: relatedEntityId,
         created_at: new Date().toISOString(),
-        read: false
+        is_read: false
       });
     
     if (error) {
@@ -298,5 +247,28 @@ async function createNotification(
     }
   } catch (error) {
     console.error('Exception when creating notification:', error);
+  }
+}
+
+// Funkcja do logowania zdarzeń bezpieczeństwa
+async function logSecurityEvent(userId, actionType, resourceType, resourceId, status, details = {}) {
+  try {
+    const { error } = await supabaseAdmin
+      .from('security_logs')
+      .insert({
+        user_id: userId,
+        action_type: actionType,
+        resource_type: resourceType,
+        resource_id: String(resourceId),
+        status: status,
+        details: details,
+        created_at: new Date().toISOString()
+      });
+    
+    if (error) {
+      console.error('Error logging security event:', error);
+    }
+  } catch (error) {
+    console.error('Exception logging security event:', error);
   }
 }

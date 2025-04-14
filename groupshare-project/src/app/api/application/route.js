@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
-import supabase from '../../../lib/supabase-client';
+import supabaseAdmin from '@/lib/supabase-admin-client';
 
 /**
  * GET /api/applications
@@ -17,35 +17,27 @@ export async function GET(request) {
       );
     }
 
-    // Get auth token
-    const authToken = await user.getToken();
+    // Pobierz profil użytkownika bezpośrednio z supabaseAdmin
+    const { data: userProfile, error: profileError } = await supabaseAdmin
+      .from('user_profiles')
+      .select('id')
+      .eq('external_auth_id', user.id)
+      .single();
 
-    // Pobierz profil użytkownika
-    const profileResponse = await fetch(
-      `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/profile`,
-      {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${authToken}` // Add token to the request
-        }
-      }
-    );
-
-    if (!profileResponse.ok) {
+    if (profileError || !userProfile) {
+      console.error('Error fetching user profile:', profileError);
       return NextResponse.json(
-        { error: 'Failed to fetch user profile' },
-        { status: profileResponse.status }
+        { error: 'User profile not found', details: profileError },
+        { status: 404 }
       );
     }
-
-    const userProfile = await profileResponse.json();
 
     // Pobierz parametry z URL
     const { searchParams } = new URL(request.url);
     const active = searchParams.get('active') === 'true';
 
     // Zapytanie do bazy danych
-    let query = supabase
+    let query = supabaseAdmin
       .from('applications')
       .select(`
         *,
@@ -77,7 +69,7 @@ export async function GET(request) {
     if (error) {
       console.error('Error fetching applications:', error);
       return NextResponse.json(
-        { error: 'Failed to fetch applications', code: error.code },
+        { error: 'Failed to fetch applications', details: error },
         { status: 500 }
       );
     }
@@ -86,7 +78,7 @@ export async function GET(request) {
   } catch (error) {
     console.error('Error in applications API:', error);
     return NextResponse.json(
-      { error: 'An unexpected error occurred' },
+      { error: 'An unexpected error occurred', details: error.message },
       { status: 500 }
     );
   }

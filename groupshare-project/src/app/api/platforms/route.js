@@ -1,6 +1,6 @@
 // src/app/api/platforms/route.js
 import { NextResponse } from 'next/server';
-import supabase from '../../../lib/supabase-client';
+import supabaseAdmin from '@/lib/supabase-admin-client';
 
 /**
  * GET /api/platforms
@@ -8,7 +8,9 @@ import supabase from '../../../lib/supabase-client';
  */
 export async function GET() {
   try {
-    const { data, error } = await supabase
+    console.log('Fetching platforms with admin client...');
+    
+    const { data, error } = await supabaseAdmin
       .from('subscription_platforms')
       .select('*')
       .eq('active', true)
@@ -17,7 +19,7 @@ export async function GET() {
     if (error) {
       console.error('Error fetching platforms:', error);
       return NextResponse.json(
-        { error: 'Failed to fetch platforms' }, 
+        { error: 'Failed to fetch platforms', details: error }, 
         { status: 500 }
       );
     }
@@ -26,7 +28,7 @@ export async function GET() {
   } catch (error) {
     console.error('Error in platforms API:', error);
     return NextResponse.json(
-      { error: 'An unexpected error occurred' },
+      { error: 'An unexpected error occurred', details: error.message },
       { status: 500 }
     );
   }

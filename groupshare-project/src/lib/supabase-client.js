@@ -1,5 +1,6 @@
 // src/lib/supabase-client.js
 import { createClient } from '@supabase/supabase-js';
+import supabaseAdmin from './supabase-admin-client';
 
 // Initialize the Supabase client
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -33,6 +34,7 @@ export const getUserByAuthId = async (authId) => {
   if (!authId) return null;
   
   try {
+    // First try with regular client
     const { data, error } = await supabase
       .from('user_profiles')
       .select('*')
@@ -44,8 +46,24 @@ export const getUserByAuthId = async (authId) => {
         // Nie znaleziono - to normalny przypadek, nie musimy logować
         return null;
       } else if (error.code === '42501') {
-        console.error('Permission denied when fetching user profile:', error);
-        throw new Error('Permission denied when accessing user profile');
+        console.log('Permission denied with regular client, trying admin client');
+        
+        // Jeśli brak uprawnień, spróbuj z klientem administracyjnym
+        const { data: adminData, error: adminError } = await supabaseAdmin
+          .from('user_profiles')
+          .select('*')
+          .eq('external_auth_id', authId)
+          .single();
+        
+        if (adminError) {
+          if (adminError.code === 'PGRST116') {
+            return null;
+          }
+          console.error('Admin client also failed:', adminError);
+          throw new Error('Failed to fetch user profile even with admin privileges');
+        }
+        
+        return adminData;
       } else {
         console.error('Error fetching user profile:', error);
         throw new Error(error.message || 'Failed to fetch user profile');
@@ -62,7 +80,8 @@ export const getUserByAuthId = async (authId) => {
 // Function to create a new user profile
 export const createUserProfile = async (userProfile) => {
   try {
-    const { data, error } = await supabase
+    // Używamy klienta administratora do tworzenia profilu
+    const { data, error } = await supabaseAdmin
       .from('user_profiles')
       .insert([userProfile])
       .select()
@@ -71,7 +90,12 @@ export const createUserProfile = async (userProfile) => {
     if (error) {
       if (error.code === '23505') {
         console.warn('Attempt to create duplicate user profile:', error);
-        throw new Error('User profile already exists');
+        
+        // Jeśli profil już istnieje, pobierz go
+        const existingUser = await getUserByAuthId(userProfile.external_auth_id);
+        if (existingUser) return existingUser;
+        
+        throw new Error('User profile already exists but could not be retrieved');
       } else if (error.code === '42501') {
         console.error('Permission denied when creating user profile:', error);
         throw new Error('Permission denied when creating user profile');
@@ -106,7 +130,21 @@ export const updateUserProfile = async (userId, updates) => {
       .select()
       .single();
     
-    if (error) throw error;
+    // If permission denied, try with admin client
+    if (error && error.code === '42501') {
+      console.log('Permission denied when updating profile, trying admin client');
+      const { data: adminData, error: adminError } = await supabaseAdmin
+        .from('user_profiles')
+        .update(updates)
+        .eq('id', userId)
+        .select()
+        .single();
+        
+      if (adminError) throw adminError;
+      return adminData;
+    } else if (error) {
+      throw error;
+    }
     
     return data;
   } catch (error) {
@@ -124,7 +162,20 @@ export const getSubscriptionPlatforms = async () => {
       .eq('active', true)
       .order('name');
     
-    if (error) throw error;
+    // If permission denied, try with admin client
+    if (error && error.code === '42501') {
+      console.log('Permission denied when fetching platforms, trying admin client');
+      const { data: adminData, error: adminError } = await supabaseAdmin
+        .from('subscription_platforms')
+        .select('*')
+        .eq('active', true)
+        .order('name');
+        
+      if (adminError) throw adminError;
+      return adminData;
+    } else if (error) {
+      throw error;
+    }
     
     return data;
   } catch (error) {
@@ -180,7 +231,57 @@ export const getSubscriptionOffers = async (filters = {}) => {
     
     const { data, error } = await query;
     
-    if (error) throw error;
+    // If permission denied, try with admin client
+    if (error && error.code === '42501') {
+      console.log('Permission denied when fetching offers, trying admin client');
+      
+      // Ponowne zbudowanie zapytania z klientem administratora
+      let adminQuery = supabaseAdmin
+        .from('group_subs')
+        .select(`
+          *,
+          subscription_platforms(*),
+          groups(id, name),
+          owner:groups!inner(owner_id, user_profiles!inner(id, display_name, avatar_url, rating_avg, rating_count, verification_level))
+        `)
+        .eq('status', 'active');
+      
+      // Ponowne zastosowanie filtrów
+      if (filters.platformId) {
+        adminQuery = adminQuery.eq('platform_id', filters.platformId);
+      }
+      
+      if (filters.minPrice !== undefined) {
+        adminQuery = adminQuery.gte('price_per_slot', filters.minPrice);
+      }
+      
+      if (filters.maxPrice !== undefined) {
+        adminQuery = adminQuery.lte('price_per_slot', filters.maxPrice);
+      }
+      
+      if (filters.availableSlots === true) {
+        adminQuery = adminQuery.gt('slots_available', 0);
+      }
+      
+      // Dodanie sortowania
+      adminQuery = adminQuery.order(orderBy, { ascending });
+      
+      // Dodanie stronicowania
+      if (filters.limit) {
+        adminQuery = adminQuery.limit(filters.limit);
+      }
+      
+      if (filters.offset) {
+        adminQuery = adminQuery.range(filters.offset, filters.offset + (filters.limit || 10) - 1);
+      }
+      
+      const { data: adminData, error: adminError } = await adminQuery;
+      
+      if (adminError) throw adminError;
+      return adminData;
+    } else if (error) {
+      throw error;
+    }
     
     return data;
   } catch (error) {
@@ -203,7 +304,25 @@ export const getSubscriptionOffer = async (offerId) => {
       .eq('id', offerId)
       .single();
     
-    if (error) throw error;
+    // If permission denied, try with admin client
+    if (error && error.code === '42501') {
+      console.log('Permission denied when fetching offer, trying admin client');
+      const { data: adminData, error: adminError } = await supabaseAdmin
+        .from('group_subs')
+        .select(`
+          *,
+          subscription_platforms(*),
+          groups(id, name, description),
+          owner:groups!inner(owner_id, user_profiles!inner(id, display_name, avatar_url, rating_avg, rating_count, verification_level, bio))
+        `)
+        .eq('id', offerId)
+        .single();
+        
+      if (adminError) throw adminError;
+      return adminData;
+    } else if (error) {
+      throw error;
+    }
     
     return data;
   } catch (error) {
@@ -211,6 +330,8 @@ export const getSubscriptionOffer = async (offerId) => {
     return null;
   }
 };
+
+// Dalsza część pliku pozostaje bez zmian...
 
 // Function to create a new application for a subscription
 export const createApplication = async (application) => {

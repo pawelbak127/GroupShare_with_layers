@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
-import supabase from '../../../lib/supabase-client';
-import supabaseAdmin from '../../../lib/supabase-admin-client';
+import crypto from 'crypto';
+import supabaseAdmin from '@/lib/supabase-admin-client';
 
 /**
  * POST /api/payments
@@ -20,41 +20,66 @@ export async function POST(request) {
       );
     }
     
-    // Pobierz lub utwórz profil użytkownika poprzez dedykowane API
-    let userProfileId;
+    console.log('Processing payment for user:', user.id);
+    
+    // Pobierz profil użytkownika bezpośrednio z Supabase używając supabaseAdmin
+    let userProfile;
     try {
-      // Get the auth token from the Clerk user
-      const authToken = await user.getToken();
+      const { data, error } = await supabaseAdmin
+        .from('user_profiles')
+        .select('id')
+        .eq('external_auth_id', user.id)
+        .single();
       
-      // Wykorzystanie istniejącego endpointu, który ma odpowiednie uprawnienia
-      const profileResponse = await fetch(
-        `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/profile`,
-        {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${authToken}`  // Add token to the request
-          }
-        }
-      );
-      
-      if (!profileResponse.ok) {
-        throw new Error(`Failed to fetch user profile: ${profileResponse.status}`);
+      if (error) {
+        console.error('Error fetching user profile:', error);
+        throw new Error('Failed to fetch user profile');
       }
       
-      const userProfile = await profileResponse.json();
-      userProfileId = userProfile.id;
+      if (!data) {
+        console.log('User profile not found, creating new profile');
+        
+        // Tworzenie nowego profilu
+        const newProfile = {
+          external_auth_id: user.id,
+          display_name: user.firstName 
+            ? `${user.firstName} ${user.lastName || ''}`.trim() 
+            : (user.username || 'Nowy użytkownik'),
+          email: user.emailAddresses[0]?.emailAddress || '',
+          phone_number: user.phoneNumbers[0]?.phoneNumber || null,
+          profile_type: 'buyer',
+          verification_level: 'basic',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+        
+        const { data: createdProfile, error: createError } = await supabaseAdmin
+          .from('user_profiles')
+          .insert([newProfile])
+          .select('id')
+          .single();
+        
+        if (createError) {
+          console.error('Error creating user profile:', createError);
+          throw new Error('Failed to create user profile');
+        }
+        
+        userProfile = createdProfile;
+      } else {
+        userProfile = data;
+      }
       
+      console.log('User profile found/created:', userProfile.id);
     } catch (error) {
       console.error('Error fetching or creating user profile:', error);
       return NextResponse.json(
-        { error: 'Failed to retrieve user profile' },
+        { error: 'Failed to retrieve user profile', details: error.message },
         { status: 500 }
       );
     }
     
-    // Pobierz zakup i powiązaną ofertę
-    const { data: purchase, error: purchaseError } = await supabase
+    // Pobierz zakup i powiązaną ofertę używając supabaseAdmin
+    const { data: purchase, error: purchaseError } = await supabaseAdmin
       .from('purchase_records')
       .select(`
         id, status, group_sub_id, user_id,
@@ -79,51 +104,57 @@ export async function POST(request) {
     }
     
     // Sprawdź, czy zakup należy do użytkownika
-    if (purchase.user_id !== userProfileId) {
-      console.warn(`Security warning: User ${userProfileId} attempted to process payment for purchase ${purchaseId} belonging to user ${purchase.user_id}`);
+    if (purchase.user_id !== userProfile.id) {
+      console.warn(`Security warning: User ${userProfile.id} attempted to process payment for purchase ${purchaseId} belonging to user ${purchase.user_id}`);
       return NextResponse.json(
         { error: 'You do not have permission to process this payment' },
         { status: 403 }
       );
     }
     
-    // Wywołaj funkcję process_payment z bazy danych
-    const { data: paymentResult, error: paymentError } = await supabase.rpc(
-      'process_payment',
-      {
-        p_user_id: userProfileId,
-        p_group_sub_id: purchase.group_sub_id,
-        p_payment_method: paymentMethod,
-        p_payment_provider: 'stripe', // Możemy dostosować w zależności od wyboru
-        p_payment_id: 'pmt_' + Math.random().toString(36).substr(2, 9) // Przykładowe ID
-      }
-    );
-    
-    if (paymentError) {
-      console.error('Error processing payment:', paymentError);
+    // Pobierz właściciela grupy
+    const sellerId = purchase.group_sub.groups.owner_id;
+    if (!sellerId) {
+      console.error('Error: Could not determine seller ID for transaction');
       return NextResponse.json(
-        { error: paymentError.message || 'Failed to process payment', code: paymentError.code },
+        { error: 'Could not determine seller for transaction' },
         { status: 500 }
       );
     }
     
-    // Generowanie bezpiecznego tokenu dostępu
-    const { data: tokenData, error: tokenError } = await supabase.rpc(
-      'generate_secure_token'
+    // Wywołaj funkcje przetwarzania płatności bezpośrednio z supabaseAdmin
+    // Krok 1: Utwórz transakcję
+    const transactionId = await createTransaction(
+      userProfile.id,
+      sellerId,
+      purchase.group_sub_id,
+      purchaseId,
+      purchase.group_sub.price_per_slot,
+      paymentMethod
     );
     
-    if (tokenError) {
-      console.error('Error generating token:', tokenError);
-      // Płatność już się powiodła, ale logujemy błąd
-      // Używamy tokenu zapasowego tylko w ostateczności
+    if (!transactionId) {
+      return NextResponse.json(
+        { error: 'Failed to create transaction' },
+        { status: 500 }
+      );
     }
     
-    // Użyj bezpiecznego tokenu z bazy danych lub wygeneruj zapasowy
-    // W produkcji powinno być obsłużone bardziej rygorystycznie
-    const token = tokenData || crypto.randomBytes(32).toString('hex');
+    // Krok 2: Zaktualizuj zakup i ukończ transakcję
+    const paymentCompleted = await completeTransaction(transactionId, purchaseId);
+    
+    if (!paymentCompleted) {
+      return NextResponse.json(
+        { error: 'Failed to complete transaction' },
+        { status: 500 }
+      );
+    }
+    
+    // Wygeneruj token dostępu
+    const token = generateToken();
     
     try {
-      // Zapisanie tokenu dostępu używając administratora Supabase (aby ominąć RLS)
+      // Zapisanie tokenu dostępu za pomocą klienta administratora
       const { error: insertError } = await supabaseAdmin
         .from('access_tokens')
         .insert({
@@ -141,6 +172,22 @@ export async function POST(request) {
       console.error('Exception when saving access token:', insertError);
       // Kontynuujemy mimo błędu, płatność już została zrealizowana
     }
+    
+    // Zaloguj operację w security_logs
+    await supabaseAdmin
+      .from('security_logs')
+      .insert({
+        user_id: userProfile.id,
+        action_type: 'payment_processed',
+        resource_type: 'purchase_record',
+        resource_id: purchaseId,
+        status: 'success',
+        details: {
+          transaction_id: transactionId,
+          payment_method: paymentMethod,
+          timestamp: new Date().toISOString()
+        }
+      });
     
     // Tworzymy URL dostępu
     const accessUrl = `${process.env.NEXT_PUBLIC_APP_URL}/access?id=${purchaseId}&token=${token}`;
@@ -160,10 +207,99 @@ export async function POST(request) {
   }
 }
 
+// Funkcja do tworzenia transakcji
+async function createTransaction(buyerId, sellerId, groupSubId, purchaseRecordId, amount, paymentMethod) {
+  try {
+    // Stała prowizja platformy - 5%
+    const platformFeePercent = 0.05;
+    const platformFee = amount * platformFeePercent;
+    const sellerAmount = amount - platformFee;
+    
+    const paymentId = 'pmt_' + Math.random().toString(36).substr(2, 9);
+    
+    const { data, error } = await supabaseAdmin
+      .from('transactions')
+      .insert({
+        buyer_id: buyerId,
+        seller_id: sellerId,
+        group_sub_id: groupSubId,
+        purchase_record_id: purchaseRecordId,
+        amount: amount,
+        platform_fee: platformFee,
+        seller_amount: sellerAmount,
+        currency: 'PLN', // Domyślna waluta
+        payment_method: paymentMethod,
+        payment_provider: 'stripe', // Możemy dostosować w zależności od wyboru
+        payment_id: paymentId,
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .select('id')
+      .single();
+    
+    if (error) {
+      console.error('Error creating transaction:', error);
+      return null;
+    }
+    
+    return data.id;
+  } catch (error) {
+    console.error('Exception creating transaction:', error);
+    return null;
+  }
+}
+
+// Funkcja do ukończenia transakcji
+async function completeTransaction(transactionId, purchaseRecordId) {
+  try {
+    // Zaktualizuj transakcję jako ukończoną
+    const { error: transactionError } = await supabaseAdmin
+      .from('transactions')
+      .update({
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', transactionId);
+    
+    if (transactionError) {
+      console.error('Error completing transaction:', transactionError);
+      return false;
+    }
+    
+    // Zaktualizuj rekord zakupu jako ukończony i z dostępem
+    const { error: purchaseError } = await supabaseAdmin
+      .from('purchase_records')
+      .update({
+        status: 'completed',
+        access_provided: true,
+        access_provided_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', purchaseRecordId);
+    
+    if (purchaseError) {
+      console.error('Error updating purchase record:', purchaseError);
+      return false;
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Exception completing transaction:', error);
+    return false;
+  }
+}
+
+// Funkcja generująca bezpieczny token
+function generateToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
 // Bezpieczna funkcja hashująca token
 function hashToken(token) {
-  return require('crypto')
+  return crypto
     .createHash('sha256')
-    .update(token + process.env.TOKEN_SALT || '')
+    .update(token + (process.env.TOKEN_SALT || ''))
     .digest('hex');
 }
