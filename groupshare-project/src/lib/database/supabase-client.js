@@ -31,7 +31,8 @@ export const handleDatabaseError = (error, operation = 'database operation', thr
     message: error.message || `Wystąpił błąd podczas ${operation}`,
     code: error.code || 'unknown_error',
     details: error.details || null,
-    operation
+    operation,
+    data: [] // Dodano pustą tablicę dla kompatybilności z klientem
   };
 
   // Zapisz szczegółowy log błędu
@@ -48,6 +49,7 @@ export const handleDatabaseError = (error, operation = 'database operation', thr
     enhancedError.code = standardError.code;
     enhancedError.details = standardError.details;
     enhancedError.operation = operation;
+    enhancedError.data = []; // Dodano pustą tablicę dla kompatybilności
     throw enhancedError;
   }
 
@@ -85,13 +87,27 @@ export const safeQueryExecution = async (
           return handleDatabaseError(adminResult.error, operationName, throwOnError);
         }
         
-        return adminResult.data;
+        // Upewnij się, że zwracamy dane w oczekiwanym formacie
+        if (Array.isArray(adminResult.data)) {
+          return adminResult.data;
+        } else if (adminResult.data === null || adminResult.data === undefined) {
+          return []; // Zwracamy pustą tablicę jeśli nie ma danych
+        } else {
+          return adminResult.data; // Zwracamy pojedynczy obiekt
+        }
       }
       
       return handleDatabaseError(result.error, operationName, throwOnError);
     }
     
-    return result.data;
+    // Upewnij się, że zwracamy dane w oczekiwanym formacie
+    if (Array.isArray(result.data)) {
+      return result.data;
+    } else if (result.data === null || result.data === undefined) {
+      return []; // Zwracamy pustą tablicę jeśli nie ma danych
+    } else {
+      return result.data; // Zwracamy pojedynczy obiekt
+    }
   } catch (error) {
     return handleDatabaseError(error, operationName, throwOnError);
   }

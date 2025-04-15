@@ -59,11 +59,14 @@ export default function OffersList({ initialOffers = null, platformId = null }) 
   
   // Pobieranie ofert
   const loadOffers = useCallback(async () => {
-    // Jeśli mamy początkowe oferty i brak własnych filtrów, użyj ich
+    // Jeśli mamy początkowe oferty (nie null i nie pusta tablica) i brak własnych filtrów, użyj ich
     if (initialOffers && 
+        Array.isArray(initialOffers) && 
+        initialOffers.length > 0 && 
         !filters.platformId && 
         !filters.minPrice && 
         !filters.maxPrice) {
+      console.log('Using initial offers:', initialOffers.length);
       setOffers(initialOffers);
       setIsLoading(false);
       return;
@@ -73,12 +76,19 @@ export default function OffersList({ initialOffers = null, platformId = null }) 
       setIsLoading(true);
       setError(null);
       
+      console.log('Fetching offers with filters:', filters);
       const data = await fetchOffers(filters);
-      setOffers(data || []);
+      
+      // Ensure we always have an array to work with
+      const offersArray = Array.isArray(data) ? data : [];
+      console.log('Received offers:', offersArray.length);
+      setOffers(offersArray);
     } catch (err) {
       console.error('Error fetching offers:', err);
       setError(err.message || 'Nie udało się pobrać ofert subskrypcji. Spróbuj ponownie.');
       toast.error('Problem z pobraniem ofert. Odświeżamy stronę...');
+      // Set empty array on error to avoid map errors
+      setOffers([]);
     } finally {
       setIsLoading(false);
     }
@@ -132,7 +142,7 @@ export default function OffersList({ initialOffers = null, platformId = null }) 
   }
   
   // Renderowanie pustej listy
-  if (offers.length === 0) {
+  if (!offers || offers.length === 0) {
     return (
       <div>
         <FilterBar filters={filters} onFilterChange={handleFilterChange} />
@@ -152,7 +162,7 @@ export default function OffersList({ initialOffers = null, platformId = null }) 
       <FilterBar filters={filters} onFilterChange={handleFilterChange} />
       
       <div className="mt-6 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {offers.map((offer) => (
+        {Array.isArray(offers) && offers.map((offer) => (
           <OfferCard key={offer.id} offer={offer} />
         ))}
       </div>

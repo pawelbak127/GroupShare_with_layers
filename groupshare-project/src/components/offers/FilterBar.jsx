@@ -54,7 +54,7 @@ const FilterBar = ({ filters, onFilterChange }) => {
     }
   };
 
-  // Handle sorting changes
+  // Handle sorting changes - FIXED for slots_available sorting
   const handleSortChange = (e) => {
     const [orderBy, direction] = e.target.value.split(':');
     

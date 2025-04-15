@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
 import { offersRepository, userRepository } from '@/lib/database/supabase-client';
 import { handleApiError, apiResponse, validateRequestBody, protectApiRoute } from '@/lib/api/error-handler';
+import supabaseAdmin from '@/lib/database/supabase-admin-client';
 import crypto from 'crypto';
 
 // Schemat walidacji dla tworzenia oferty
@@ -21,8 +22,11 @@ const createOfferSchema = {
  */
 export async function GET(request) {
   try {
+    console.log('GET /api/offers - Request received');
+    
     // Parsuj parametry zapytania
     const { searchParams } = new URL(request.url);
+    console.log('Search params:', Object.fromEntries(searchParams.entries()));
     
     // Przygotuj filtry na podstawie parametrów
     const filters = {
@@ -32,18 +36,68 @@ export async function GET(request) {
       availableSlots: searchParams.get('availableSlots') !== 'false', // Domyślnie true
       orderBy: searchParams.get('orderBy') || 'created_at',
       ascending: searchParams.get('ascending') === 'true',
-      limit: searchParams.get('limit') ? parseInt(searchParams.get('limit')) : 10,
+      limit: searchParams.get('limit') ? parseInt(searchParams.get('limit')) : 20,
       page: searchParams.get('page') ? parseInt(searchParams.get('page')) : 1
     };
+    
+    console.log('Processed filters:', filters);
     
     // Oblicz offset na podstawie strony i limitu
     filters.offset = (filters.page - 1) * filters.limit;
     
-    // Pobierz oferty z repozytorium
-    const offers = await offersRepository.getAll(filters);
+    // Zbuduj zapytanie bazowe
+    let query = supabaseAdmin
+      .from('group_subs')
+      .select(`
+        *,
+        subscription_platforms(*),
+        groups(id, name),
+        owner:groups!inner(owner_id, user_profiles!inner(id, display_name, avatar_url, rating_avg, rating_count, verification_level))
+      `)
+      .eq('status', 'active');
     
+    // Zastosuj filtry
+    if (filters.platformId) {
+      query = query.eq('platform_id', filters.platformId);
+    }
+    
+    if (filters.minPrice !== undefined) {
+      query = query.gte('price_per_slot', filters.minPrice);
+    }
+    
+    if (filters.maxPrice !== undefined) {
+      query = query.lte('price_per_slot', filters.maxPrice);
+    }
+    
+    if (filters.availableSlots) {
+      query = query.gt('slots_available', 0);
+    }
+    
+    // Sortowanie
+    query = query.order(filters.orderBy, { ascending: filters.ascending });
+    
+    // Paginacja
+    query = query.range(filters.offset, filters.offset + filters.limit - 1);
+    
+    console.log('Executing Supabase query');
+    
+    // Wykonaj zapytanie
+    const { data, error, count } = await query;
+    
+    if (error) {
+      console.error('Supabase error:', error);
+      return handleApiError(error, 'Nie udało się pobrać ofert subskrypcji');
+    }
+    
+    console.log(`Query successful, returned ${data?.length || 0} offers`);
+    
+    // Upewnij się, że zawsze zwracamy tablicę
+    const offers = Array.isArray(data) ? data : [];
+    
+    // Używamy apiResponse, aby zapewnić spójny format odpowiedzi
     return apiResponse(offers);
   } catch (error) {
+    console.error('Unexpected error in /api/offers:', error);
     return handleApiError(error, 'Nie udało się pobrać ofert subskrypcji');
   }
 }

@@ -16,6 +16,8 @@ export function useOffersApi() {
    */
   const fetchOffers = useCallback(async (filters = {}) => {
     try {
+      console.log('fetchOffers called with filters:', filters);
+      
       // Buduj parametry URL z filtrów
       const queryParams = new URLSearchParams();
       
@@ -34,8 +36,12 @@ export function useOffersApi() {
       // Dodaj domyślne wartości dla pozostałych parametrów
       queryParams.append('orderBy', filters.orderBy || 'created_at');
       queryParams.append('ascending', filters.ascending || false);
-      queryParams.append('limit', filters.limit || 10);
+      queryParams.append('limit', filters.limit || 20); // Zwiększyłem limit do 20, aby pokazać więcej ofert
       queryParams.append('page', filters.page || 1);
+      
+      // Log pełnego URL zapytania
+      const apiUrl = `/api/offers?${queryParams.toString()}`;
+      console.log('Fetching from URL:', apiUrl);
       
       // Pobierz oferty z mechanizmem ponownych prób
       let response;
@@ -44,14 +50,19 @@ export function useOffersApi() {
       
       while (retryCount < maxRetries) {
         try {
-          response = await fetch(`/api/offers?${queryParams.toString()}`);
+          response = await fetch(apiUrl);
           
-          if (response.ok) break;
+          if (response.ok) {
+            console.log('Response OK, status:', response.status);
+            break;
+          }
           
+          console.warn(`Attempt ${retryCount + 1} failed with status ${response.status}`);
           // Jeśli błąd, zwiększ licznik i spróbuj ponownie
           retryCount++;
           await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
         } catch (err) {
+          console.error(`Fetch error on attempt ${retryCount + 1}:`, err);
           retryCount++;
           if (retryCount >= maxRetries) throw err;
           await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
@@ -64,17 +75,60 @@ export function useOffersApi() {
       
       const responseData = await response.json();
       
+      // Log surowej odpowiedzi API
+      console.log('Raw API response:', responseData);
+      
       // Sprawdź, czy odpowiedź zawiera dane
       if (!responseData) {
         throw new Error('Otrzymano niepoprawny format danych z serwera');
       }
       
       // Obsługa obu formatów API - stary i nowy
-      return responseData.data || responseData;
+      let data;
+      
+      // Sprawdź czy odpowiedź ma format { data: [...] }
+      if (responseData.data !== undefined) {
+        console.log('Response has data property');
+        data = responseData.data;
+      } 
+      // Sprawdź czy odpowiedź ma format { success: true, data: [...] }
+      else if (responseData.success === true && responseData.data !== undefined) {
+        console.log('Response has success and data properties');
+        data = responseData.data;
+      } 
+      // Jeśli to tablica, użyj jej bezpośrednio
+      else if (Array.isArray(responseData)) {
+        console.log('Response is an array');
+        data = responseData;
+      } 
+      // W przeciwnym razie użyj całej odpowiedzi
+      else {
+        console.log('Using whole response as data');
+        data = responseData;
+      }
+      
+      // Sprawdź czy dane są tablicą, jeśli nie, sprawdź czy można je przekształcić
+      if (!Array.isArray(data)) {
+        console.warn('API returned non-array data:', data);
+        
+        // Sprawdź czy dane mają właściwości, które wskazują, że to pojedyncza oferta
+        if (data && data.id && data.price_per_slot) {
+          console.log('Data appears to be a single offer, converting to array');
+          return [data];
+        }
+        
+        // Ostatecznie, jeśli nie możemy przekształcić danych, zwróć pustą tablicę
+        console.warn('Returning empty array as data is not in expected format');
+        return [];
+      }
+      
+      console.log(`Returning ${data.length} offers`);
+      return data;
     } catch (error) {
       console.error('Error in fetchOffers:', error);
       toast.error('Nie udało się pobrać ofert');
-      throw error;
+      // Return empty array on error instead of throwing
+      return [];
     }
   }, []);
   

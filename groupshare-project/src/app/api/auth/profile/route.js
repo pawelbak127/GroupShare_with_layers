@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
-import { getUserByAuthId } from '../../../../lib/database/supabase-client';
+import { userRepository } from '../../../../lib/database/supabase-client';
 import supabaseAdmin from '../../../../lib/database/supabase-admin-client';
 
 /**
@@ -22,7 +22,8 @@ export async function GET() {
     console.log("Użytkownik Clerk:", user.id);
     
     // Sprawdź, czy użytkownik ma profil w bazie danych
-    const userProfile = await getUserByAuthId(user.id);
+    // Użyj userRepository.getByAuthId zamiast getUserByAuthId
+    const userProfile = await userRepository.getByAuthId(user.id);
     
     // Jeśli profil istnieje, zwróć go
     if (userProfile) {
@@ -103,7 +104,8 @@ export async function PATCH(request) {
     }
     
     // Sprawdź, czy użytkownik ma profil w bazie danych
-    const userProfile = await getUserByAuthId(user.id);
+    // Użyj userRepository.getByAuthId zamiast getUserByAuthId
+    const userProfile = await userRepository.getByAuthId(user.id);
     
     if (!userProfile) {
       return NextResponse.json(

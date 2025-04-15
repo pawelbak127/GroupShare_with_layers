@@ -46,7 +46,8 @@ export function handleApiError(error, defaultStatus = 500) {
       message, 
       code, 
       details, 
-      timestamp: new Date().toISOString() 
+      timestamp: new Date().toISOString(),
+      data: [] // Dodano pustą tablicę dla kompatybilności z klientem
     }, 
     { status }
   );
@@ -60,9 +61,12 @@ export function handleApiError(error, defaultStatus = 500) {
  * @returns {NextResponse} - Ujednolicona odpowiedź sukcesu
  */
 export function apiResponse(data, status = 200, message = null) {
+  // Jeśli dane są null lub undefined, zwróć pustą tablicę
+  const sanitizedData = data === null || data === undefined ? [] : data;
+  
   const response = {
     success: true,
-    data
+    data: sanitizedData
   };
   
   if (message) {
@@ -148,7 +152,7 @@ export function protectApiRoute(handler, options = {}) {
         const user = await currentUser();
         if (!user) {
           return NextResponse.json(
-            { error: true, message: 'Unauthorized', code: 'unauthorized' },
+            { error: true, message: 'Unauthorized', code: 'unauthorized', data: [] },
             { status: 401 }
           );
         }
@@ -162,7 +166,7 @@ export function protectApiRoute(handler, options = {}) {
           const hasRole = await checkUserRole(user, requiredRole);
           if (!hasRole) {
             return NextResponse.json(
-              { error: true, message: 'Insufficient permissions', code: 'forbidden' },
+              { error: true, message: 'Insufficient permissions', code: 'forbidden', data: [] },
               { status: 403 }
             );
           }
@@ -176,7 +180,13 @@ export function protectApiRoute(handler, options = {}) {
         
         if (!isValid) {
           return NextResponse.json(
-            { error: true, message: 'Validation failed', code: 'validation_error', details: errors },
+            { 
+              error: true, 
+              message: 'Validation failed', 
+              code: 'validation_error', 
+              details: errors,
+              data: [] 
+            },
             { status: 400 }
           );
         }
