@@ -1,7 +1,7 @@
 // src/app/api/offers/[id]/route.js
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
-import supabaseAdmin from '@/lib/supabase-admin-client';
+import supabaseAdmin from '@/lib/database/supabase-admin-client';
 
 /**
  * GET /api/offers/[id]

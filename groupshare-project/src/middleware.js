@@ -1,7 +1,7 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from 'next/server';
-import { getUserByAuthId, createUserProfile } from './lib/supabase-client';
-import supabaseAdmin, { logAdminActivity } from './lib/supabase-admin-client';
+import { getUserByAuthId, createUserProfile } from './lib/database/supabase-client';
+import supabaseAdmin, { logAdminActivity } from './lib/database/supabase-admin-client';
 
 // Definicja ścieżek uwierzytelniania Clerk, które powinny być obsługiwane
 const clerkPublicRoutes = [

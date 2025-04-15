@@ -1,6 +1,6 @@
 import { generateRsaKeyPair, generateEccKeyPair } from './key-generation';
 import crypto from 'crypto';
-import supabase from '../supabase-client';
+import supabase from '../database/supabase-client';
 
 /**
  * Serwis zarządzania kluczami kryptograficznymi

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
-import supabaseAdmin from '@/lib/supabase-admin-client';
+import supabaseAdmin from '@/lib/database/supabase-admin-client';
 
 /**
  * POST /api/purchases/[id]/confirm-access

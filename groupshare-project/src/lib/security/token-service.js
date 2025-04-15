@@ -1,21 +1,224 @@
+// src/lib/security/token-service.js
 import crypto from 'crypto';
-import supabase from '../supabase-client';
+import supabaseAdmin from '../database/supabase-admin-client';
 
 /**
- * Serwis zarządzania tokenami jednorazowymi
- * z ulepszoną bezpiecznością i ochroną przed nadużyciami
+ * Zunifikowany serwis zarządzania tokenami dostępowymi
+ * Konsoliduje funkcje z token-utils.js i token-service.js
  */
 export class TokenService {
+  /**
+   * Inicjalizuje serwis tokenów z opcjonalnymi ustawieniami
+   * @param {Object} options - Opcje konfiguracyjne 
+   */
   constructor(options = {}) {
     this.tokenLength = options.tokenLength || 32; // długość tokenu w bajtach
     this.defaultExpiry = options.defaultExpiry || 30; // domyślny czas wygaśnięcia w minutach
+    this.salt = process.env.TOKEN_SALT || 'default-salt-for-tokens'; // sól do hashowania tokenów
+    
+    // Limity generowania tokenów (zabezpieczenie przed nadużyciami)
     this.rateLimit = options.rateLimit || { 
       maxTokens: 5,    // maksymalna liczba tokenów na użytkownika na interwał
       interval: 60,    // interwał w minutach
     };
   }
-  
-  // Sprawdzenie limitów tokenów dla użytkownika
+
+  /**
+   * Generuje nowy token dostępu dla zakupu
+   * @param {string} purchaseId - ID zakupu
+   * @param {string} userId - ID użytkownika tworzącego token (opcjonalne)
+   * @param {number} expirationMinutes - Czas ważności tokenu w minutach
+   * @returns {Promise<{token: string, tokenId: string, accessUrl: string}>}
+   */
+  async generateAccessToken(purchaseId, userId = null, expirationMinutes = this.defaultExpiry) {
+    try {
+      // Sprawdź limity tylko jeśli podano ID użytkownika
+      if (userId) {
+        const withinLimit = await this.checkRateLimit(userId);
+        if (!withinLimit) {
+          throw new Error('Przekroczono limit generowania tokenów. Spróbuj ponownie później.');
+        }
+      }
+      
+      // Generowanie kryptograficznie bezpiecznego tokenu
+      const token = crypto.randomBytes(this.tokenLength).toString('hex');
+      
+      // Hashowanie tokenu do przechowania w bazie
+      const tokenHash = this.hashToken(token);
+      
+      // Obliczanie daty wygaśnięcia
+      const expiresAt = new Date();
+      expiresAt.setMinutes(expiresAt.getMinutes() + expirationMinutes);
+      
+      // Zapisanie tokenu w bazie danych
+      const { data, error } = await supabaseAdmin
+        .from('access_tokens')
+        .insert({
+          purchase_record_id: purchaseId,
+          token_hash: tokenHash,
+          expires_at: expiresAt.toISOString(),
+          used: false,
+          created_at: new Date().toISOString(),
+          created_by: userId
+        })
+        .select('id')
+        .single();
+      
+      if (error) {
+        console.error('Błąd tworzenia tokenu dostępu:', error);
+        throw new Error(`Nie udało się utworzyć tokenu dostępu: ${error.message}`);
+      }
+      
+      // Generowanie URL dostępu
+      const accessUrl = `${process.env.NEXT_PUBLIC_APP_URL || ''}/access?id=${purchaseId}&token=${token}`;
+      
+      // Logowanie operacji w dzienniku bezpieczeństwa
+      await this.logTokenEvent('token_created', data.id, purchaseId, userId);
+      
+      return { 
+        token, 
+        tokenId: data.id,
+        accessUrl
+      };
+    } catch (error) {
+      console.error('Błąd w generateAccessToken:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Weryfikuje token dostępu
+   * @param {string} token - Token do weryfikacji
+   * @param {string} purchaseId - ID zakupu
+   * @param {Object} metadata - Opcjonalne metadane (IP, User Agent)
+   * @returns {Promise<{valid: boolean, tokenData: Object|null, reason: string|null}>}
+   */
+  async verifyAccessToken(token, purchaseId, metadata = {}) {
+    try {
+      // Obliczanie hash tokenu
+      const tokenHash = this.hashToken(token);
+      
+      // Wyszukanie tokenu w bazie danych
+      const { data, error } = await supabaseAdmin
+        .from('access_tokens')
+        .select('*')
+        .eq('purchase_record_id', purchaseId)
+        .eq('token_hash', tokenHash)
+        .gt('expires_at', new Date().toISOString())
+        .single();
+      
+      // Jeśli wystąpił błąd (token nie znaleziony, wygasł, itp.)
+      if (error) {
+        // Sprawdź przyczynę niepowodzenia
+        const reason = await this.getTokenFailureReason(tokenHash, purchaseId);
+        
+        // Zaloguj nieudaną próbę weryfikacji
+        await this.logTokenEvent('token_verification_failed', null, purchaseId, null, {
+          reason: reason,
+          ip: metadata.ip,
+          userAgent: metadata.userAgent
+        });
+        
+        return { valid: false, tokenData: null, reason };
+      }
+      
+      // Jeśli token został już wykorzystany
+      if (data.used) {
+        await this.logTokenEvent('token_verification_failed', data.id, purchaseId, null, {
+          reason: 'Token już wykorzystany',
+          ip: metadata.ip,
+          userAgent: metadata.userAgent
+        });
+        
+        return { valid: false, tokenData: data, reason: 'Token już wykorzystany' };
+      }
+      
+      // Oznacz token jako wykorzystany, jeśli żądanie tego wymaga
+      if (metadata.markAsUsed !== false) {
+        await this.markTokenAsUsed(data.id, metadata);
+      }
+      
+      // Zaloguj udaną weryfikację
+      await this.logTokenEvent('token_verification_success', data.id, purchaseId, null, {
+        ip: metadata.ip,
+        userAgent: metadata.userAgent
+      });
+      
+      return { valid: true, tokenData: data, reason: null };
+    } catch (error) {
+      console.error('Błąd weryfikacji tokenu:', error);
+      return { valid: false, tokenData: null, reason: `Wystąpił błąd: ${error.message}` };
+    }
+  }
+
+  /**
+   * Oznacza token jako wykorzystany
+   * @param {string} tokenId - ID tokenu
+   * @param {Object} metadata - Metadane (IP, User Agent)
+   * @returns {Promise<boolean>} - Czy operacja się powiodła
+   */
+  async markTokenAsUsed(tokenId, metadata = {}) {
+    try {
+      const { error } = await supabaseAdmin
+        .from('access_tokens')
+        .update({
+          used: true,
+          used_at: new Date().toISOString(),
+          ip_address: metadata.ip || null,
+          user_agent: metadata.userAgent || null
+        })
+        .eq('id', tokenId);
+      
+      if (error) {
+        console.error('Błąd oznaczania tokenu jako użytego:', error);
+        return false;
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Wyjątek w markTokenAsUsed:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Sprawdza przyczynę niepowodzenia weryfikacji tokenu
+   * @param {string} tokenHash - Hash tokenu
+   * @param {string} purchaseId - ID zakupu
+   * @returns {Promise<string>} - Przyczyna niepowodzenia
+   */
+  async getTokenFailureReason(tokenHash, purchaseId) {
+    try {
+      // Sprawdź, czy token istnieje, ale jest już użyty lub wygasł
+      const { data: tokenData } = await supabaseAdmin
+        .from('access_tokens')
+        .select('*')
+        .eq('purchase_record_id', purchaseId)
+        .eq('token_hash', tokenHash)
+        .maybeSingle();
+      
+      if (tokenData) {
+        if (tokenData.used) {
+          return 'Token już wykorzystany';
+        }
+        
+        if (new Date(tokenData.expires_at) <= new Date()) {
+          return 'Token wygasł';
+        }
+      }
+      
+      return 'Token nie znaleziony';
+    } catch (error) {
+      console.error('Błąd sprawdzania przyczyny niepowodzenia weryfikacji tokenu:', error);
+      return 'Wystąpił błąd podczas weryfikacji';
+    }
+  }
+
+  /**
+   * Sprawdza limity generowania tokenów dla użytkownika
+   * @param {string} userId - ID użytkownika
+   * @returns {Promise<boolean>} - Czy użytkownik jest w limicie
+   */
   async checkRateLimit(userId) {
     try {
       // Obliczanie czasu od którego sprawdzamy limity
@@ -23,177 +226,78 @@ export class TokenService {
       checkFrom.setMinutes(checkFrom.getMinutes() - this.rateLimit.interval);
       
       // Liczenie tokenów wygenerowanych przez użytkownika w danym okresie
-      const { count, error } = await supabase
+      const { count, error } = await supabaseAdmin
         .from('access_tokens')
         .select('id', { count: 'exact', head: true })
         .eq('created_by', userId)
         .gte('created_at', checkFrom.toISOString());
       
       if (error) {
-        console.error('Error checking token rate limit:', error);
+        console.error('Błąd sprawdzania limitu tokenów:', error);
         // W przypadku błędu, pozwalamy na utworzenie tokenu (fail open)
         return true;
       }
       
       return count < this.rateLimit.maxTokens;
     } catch (error) {
-      console.error('Exception when checking token rate limit:', error);
+      console.error('Wyjątek podczas sprawdzania limitu tokenów:', error);
       // W przypadku wyjątku, pozwalamy na utworzenie tokenu
       return true;
     }
   }
 
-  // Generowanie jednorazowego tokenu dostępu z kontrolą limitów
-  async generateAccessToken(applicationId, userId, expiresInMinutes = this.defaultExpiry) {
-    try {
-      // Sprawdzenie limitu tokenów
-      const withinLimit = await this.checkRateLimit(userId);
-      if (!withinLimit) {
-        throw new Error('Token rate limit exceeded. Try again later.');
-      }
-      
-      // Generowanie kryptograficznie bezpiecznego tokenu
-      let token;
-      try {
-        // Używamy crypto.randomBytes do generowania losowych bajtów
-        token = crypto.randomBytes(this.tokenLength).toString('hex');
-        
-        // Weryfikacja entropii tokenu
-        if (!this.verifyTokenEntropy(token)) {
-          throw new Error('Generated token has insufficient entropy');
-        }
-      } catch (cryptoError) {
-        console.error('Error generating secure token:', cryptoError);
-        throw new Error('Failed to generate secure token');
-      }
-      
-      // Haszowanie tokenu do przechowania w bazie
-      const tokenHash = this.hashToken(token);
-      
-      // Obliczanie daty wygaśnięcia
-      const expiresAt = new Date();
-      expiresAt.setMinutes(expiresAt.getMinutes() + expiresInMinutes);
-      
-      // Zapisanie hasha tokenu w bazie
-      const { error } = await supabase
-        .from('access_tokens')
-        .insert({
-          application_id: applicationId,
-          token_hash: tokenHash,
-          expires_at: expiresAt.toISOString(),
-          used: false,
-          created_at: new Date().toISOString(),
-          created_by: userId
-        });
-      
-      if (error) throw error;
-      
-      // Zwrócenie oryginalnego tokenu (będzie dostępny tylko raz)
-      return token;
-    } catch (error) {
-      console.error('Error generating access token:', error);
-      throw new Error(error.message || 'Failed to generate access token');
-    }
-  }
-  
-  // Weryfikacja tokenu
-  async verifyToken(token, applicationId) {
-    try {
-      // Obliczenie hasha tokenu
-      const tokenHash = this.hashToken(token);
-      
-      // Pobranie tokenu z bazy danych
-      const { data, error } = await supabase
-        .from('access_tokens')
-        .select('*')
-        .eq('token_hash', tokenHash)
-        .eq('application_id', applicationId)
-        .single();
-      
-      if (error) return false;
-      
-      // Sprawdzenie czy token był już użyty
-      if (data.used) return false;
-      
-      // Sprawdzenie czy token nie wygasł
-      const now = new Date();
-      const expiresAt = new Date(data.expires_at);
-      if (now > expiresAt) return false;
-      
-      // Oznaczenie tokenu jako wykorzystanego
-      const clientIP = this.getClientIp();
-      const userAgent = this.getUserAgent();
-      
-      const { error: updateError } = await supabase
-        .from('access_tokens')
-        .update({
-          used: true,
-          used_at: now.toISOString(),
-          ip_address: clientIP,
-          user_agent: userAgent
-        })
-        .eq('token_hash', tokenHash);
-      
-      if (updateError) {
-        console.error('Error marking token as used:', updateError);
-      }
-      
-      // Dodanie wpisu audytowego
-      this.logTokenUsage(data.id, clientIP, userAgent);
-      
-      return true;
-    } catch (error) {
-      console.error('Error verifying access token:', error);
-      return false;
-    }
-  }
-  
-  // Sprawdzenie entropii tokenu (dodatkowa weryfikacja bezpieczeństwa)
-  verifyTokenEntropy(token) {
-    // Wymagamy przynajmniej 128 bitów entropii dla tokenów
-    // token hex ma 2 znaki na bajt, więc minimalna długość to 32 znaki
-    if (token.length < 32) return false;
-    
-    // Weryfikacja czy token zawiera różnorodne znaki
-    const uniqueChars = new Set(token.split('')).size;
-    // Oczekujemy przynajmniej 10 różnych znaków 
-    return uniqueChars >= 10;
-  }
-  
-  // Haszowanie tokenu
+  /**
+   * Hashuje token do przechowywania w bazie danych
+   * @param {string} token - Token do zahashowania
+   * @returns {string} - Hash tokenu
+   */
   hashToken(token) {
     return crypto
       .createHash('sha256')
-      .update(token + (process.env.TOKEN_SALT || ''))
+      .update(token + this.salt)
       .digest('hex');
   }
-  
-  // Logowanie użycia tokenu
-  async logTokenUsage(tokenId, ipAddress, userAgent) {
+
+  /**
+   * Loguje zdarzenie związane z tokenem
+   * @param {string} actionType - Typ akcji
+   * @param {string} tokenId - ID tokenu (opcjonalne)
+   * @param {string} purchaseId - ID zakupu (opcjonalne)
+   * @param {string} userId - ID użytkownika (opcjonalne)
+   * @param {Object} details - Dodatkowe szczegóły
+   */
+  async logTokenEvent(actionType, tokenId = null, purchaseId = null, userId = null, details = {}) {
     try {
-      await supabase.from('security_logs').insert({
-        action_type: 'token_usage',
+      await supabaseAdmin.from('security_logs').insert({
+        action_type: actionType,
         resource_type: 'access_token',
-        resource_id: tokenId,
-        ip_address: ipAddress,
-        user_agent: userAgent,
-        status: 'success',
+        resource_id: tokenId || purchaseId,
+        user_id: userId,
+        ip_address: details.ip || null,
+        user_agent: details.userAgent || null,
+        status: actionType.includes('_failed') ? 'failure' : 'success',
+        details: JSON.stringify(details),
         created_at: new Date().toISOString()
       });
     } catch (error) {
-      console.error('Error logging token usage:', error);
+      console.error('Błąd logowania zdarzenia tokenu:', error);
       // Nie powodujemy błędu, tylko logujemy
     }
   }
-  
-  // Pomocnicze metody do pobrania informacji o kliencie
-  getClientIp() {
-    // W rzeczywistej implementacji pobrałoby IP z nagłówków żądania
-    return '127.0.0.1';
-  }
-  
-  getUserAgent() {
-    // W rzeczywistej implementacji pobrałoby User Agent z nagłówków żądania
-    return 'Test User Agent';
-  }
+}
+
+// Eksport instancji domyślnej do użycia w aplikacji
+export const tokenService = new TokenService();
+
+// Eksport funkcji pomocniczych kompatybilnych wstecznie
+export function generateToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+export function hashToken(token) {
+  const salt = process.env.TOKEN_SALT || 'default-salt-for-tokens';
+  return crypto
+    .createHash('sha256')
+    .update(token + salt)
+    .digest('hex');
 }

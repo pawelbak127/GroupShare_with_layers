@@ -1,6 +1,6 @@
 // src/app/api/platforms/route.js
 import { NextResponse } from 'next/server';
-import supabaseAdmin from '@/lib/supabase-admin-client';
+import supabaseAdmin from '@/lib/database/supabase-admin-client';
 
 /**
  * GET /api/platforms

@@ -4,19 +4,32 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@clerk/nextjs';
-import { toast } from 'react-hot-toast';
+import { toast } from '@/lib/utils/notification';
+import { useOffersApi } from '@/hooks/api-hooks';
 
+/**
+ * Komponent karty oferty - wyświetla pojedynczą ofertę subskrypcji
+ * @param {Object} offer - Dane oferty
+ */
 const OfferCard = ({ offer }) => {
   const router = useRouter();
   const { isSignedIn } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   
+  // Użyj API hooka do obsługi zakupu
+  const { purchaseOffer } = useOffersApi();
+  
+  /**
+   * Obsługuje proces zakupu oferty
+   */
   const handlePurchase = async () => {
+    // Przekieruj do logowania jeśli użytkownik nie jest zalogowany
     if (!isSignedIn) {
       router.push(`/sign-in?redirect=${encodeURIComponent(`/offers/${offer.id}`)}`);
       return;
     }
     
+    // Sprawdź czy oferta ma dostępne miejsca
     if (offer.slots_available <= 0) {
       toast.error('Brak dostępnych miejsc');
       return;
@@ -25,23 +38,11 @@ const OfferCard = ({ offer }) => {
     setIsLoading(true);
     
     try {
-      // Utwórz rekord zakupu
-      const response = await fetch(`/api/offers/${offer.id}/purchase`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
+      // Inicjuj zakup przez API
+      const purchaseData = await purchaseOffer(offer.id);
       
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Błąd podczas inicjowania zakupu');
-      }
-      
-      const { purchase } = await response.json();
-      
-      // Przekieruj do płatności
-      router.push(`/checkout/${purchase.id}`);
+      // Przekieruj do strony płatności
+      router.push(`/checkout/${purchaseData.purchase?.id || purchaseData.id}`);
     } catch (error) {
       console.error('Purchase error:', error);
       toast.error(error.message || 'Wystąpił błąd podczas inicjowania zakupu');

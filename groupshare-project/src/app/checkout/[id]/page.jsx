@@ -4,8 +4,9 @@
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@clerk/nextjs';
-import { toast } from 'react-hot-toast';
-import LoadingSpinner from '../../../components/common/LoadingSpinner';
+import { toast } from '@/lib/utils/notification';
+import { usePaymentApi } from '@/hooks/api-hooks';
+import LoadingSpinner from '@/components/common/LoadingSpinner';
 
 export default function CheckoutPage() {
   const { id } = useParams();
@@ -16,6 +17,9 @@ export default function CheckoutPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('blik');
+  
+  // Użyj API hooka do obsługi płatności
+  const { processPayment } = usePaymentApi();
   
   useEffect(() => {
     // Przekieruj do logowania, jeśli użytkownik nie jest zalogowany
@@ -52,30 +56,17 @@ export default function CheckoutPage() {
     setIsProcessing(true);
     
     try {
-      const response = await fetch('/api/payments', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          purchaseId: id,
-          paymentMethod: selectedPaymentMethod
-        })
-      });
+      // Użyj API hooka do przetworzenia płatności
+      const paymentData = await processPayment(id, selectedPaymentMethod);
       
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Błąd podczas przetwarzania płatności');
-      }
-      
-      const paymentData = await response.json();
+      // Powiadomienie o sukcesie
+      toast.success('Płatność zrealizowana pomyślnie!');
       
       // Przekieruj do strony z instrukcjami dostępu
       if (paymentData.accessUrl) {
         window.location.href = paymentData.accessUrl;
       } else {
         // Fallback - przekieruj do dashboardu w przypadku problemu z URL dostępu
-        toast.success('Płatność zrealizowana pomyślnie!');
         router.push('/dashboard');
       }
     } catch (error) {
@@ -179,18 +170,22 @@ export default function CheckoutPage() {
             <div className="space-y-2">
               <div className="flex justify-between">
                 <span className="text-gray-600">Platforma:</span>
-                <span className="font-medium">{purchase.group_sub.subscription_platforms.name}</span>
+                <span className="font-medium">{purchase.group_sub?.subscription_platforms?.name}</span>
               </div>
               
               <div className="flex justify-between">
                 <span className="text-gray-600">Cena za miejsce:</span>
-                <span className="font-medium">{purchase.group_sub.price_per_slot.toFixed(2)} {purchase.group_sub.currency}</span>
+                <span className="font-medium">
+                  {purchase.group_sub?.price_per_slot?.toFixed(2)} {purchase.group_sub?.currency}
+                </span>
               </div>
               
               <div className="border-t border-gray-200 my-2 pt-2">
                 <div className="flex justify-between font-bold">
                   <span>Razem:</span>
-                  <span>{purchase.group_sub.price_per_slot.toFixed(2)} {purchase.group_sub.currency}</span>
+                  <span>
+                    {purchase.group_sub?.price_per_slot?.toFixed(2)} {purchase.group_sub?.currency}
+                  </span>
                 </div>
               </div>
             </div>

@@ -1,138 +1,109 @@
 // src/components/offers/OffersList.jsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import OfferCard from './OfferCard';
 import FilterBar from './FilterBar';
 import LoadingSpinner from '../common/LoadingSpinner';
 import EmptyState from '../common/EmptyState';
-import { toast } from 'react-hot-toast';
+import { toast } from '@/lib/utils/notification';
+import { useOffersApi } from '@/hooks/api-hooks';
 
 /**
- * Displays a list of subscription offers with filtering capabilities
+ * Hook do zarządzania stanem filtrów ofert
+ * @param {Object} initialFilters - Początkowe filtry
+ * @returns {Array} - [filters, setFilter, resetFilters]
  */
-const OffersList = ({ initialOffers = null, platformId = null }) => {
-  const [offers, setOffers] = useState(initialOffers || []);
-  const [isLoading, setIsLoading] = useState(!initialOffers);
-  const [error, setError] = useState(null);
-  const [filters, setFilters] = useState({
-    platformId: platformId || '',
+function useOfferFilters(initialFilters = {}) {
+  const defaultFilters = {
+    platformId: '',
     minPrice: '',
     maxPrice: '',
     orderBy: 'created_at',
-    ascending: false
-  });
+    ascending: false,
+    ...initialFilters
+  };
+  
+  const [filters, setFilters] = useState(defaultFilters);
+  
+  // Funkcja do aktualizacji pojedynczego filtra
+  const setFilter = useCallback((key, value) => {
+    setFilters(prev => ({
+      ...prev,
+      [key]: value
+    }));
+  }, []);
+  
+  // Funkcja do resetowania wszystkich filtrów do wartości początkowych
+  const resetFilters = useCallback(() => {
+    setFilters(defaultFilters);
+  }, [defaultFilters]);
+  
+  return [filters, setFilter, resetFilters];
+}
 
-  // Load offers based on filters
-  useEffect(() => {
-    // Jeśli mamy początkowe oferty i nie ma filtrów, użyj ich
+/**
+ * Wyświetla listę ofert subskrypcji z możliwością filtrowania
+ */
+export default function OffersList({ initialOffers = null, platformId = null }) {
+  // Stan komponentu
+  const [offers, setOffers] = useState(initialOffers || []);
+  const [isLoading, setIsLoading] = useState(!initialOffers);
+  const [error, setError] = useState(null);
+  
+  // Użyj hooka do zarządzania filtrami
+  const [filters, setFilter, resetFilters] = useOfferFilters({ platformId });
+  
+  // Użyj hooka do komunikacji z API
+  const { fetchOffers } = useOffersApi();
+  
+  // Pobieranie ofert
+  const loadOffers = useCallback(async () => {
+    // Jeśli mamy początkowe oferty i brak własnych filtrów, użyj ich
     if (initialOffers && 
         !filters.platformId && 
         !filters.minPrice && 
         !filters.maxPrice) {
+      setOffers(initialOffers);
+      setIsLoading(false);
       return;
     }
     
-    const fetchOffers = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
-        
-        // Build query string from filters
-        const queryParams = new URLSearchParams();
-        
-        if (filters.platformId) {
-          queryParams.append('platformId', filters.platformId);
-        }
-        
-        if (filters.minPrice) {
-          queryParams.append('minPrice', filters.minPrice);
-        }
-        
-        if (filters.maxPrice) {
-          queryParams.append('maxPrice', filters.maxPrice);
-        }
-        
-        queryParams.append('orderBy', filters.orderBy);
-        queryParams.append('ascending', filters.ascending);
-        queryParams.append('limit', '20');
-        
-        // Fetch offers with retry mechanism
-        let response;
-        let retryCount = 0;
-        const maxRetries = 3;
-        
-        while (retryCount < maxRetries) {
-          try {
-            response = await fetch(`/api/offers?${queryParams.toString()}`);
-            
-            if (response.ok) break;
-            
-            // If error, increment counter and retry
-            retryCount++;
-            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-          } catch (err) {
-            retryCount++;
-            if (retryCount >= maxRetries) throw err;
-            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-          }
-        }
-        
-        if (!response || !response.ok) {
-          throw new Error(`Nie udało się pobrać ofert: ${response?.status} ${response?.statusText}`);
-        }
-        
-        const data = await response.json();
-        
-        // Validate data
-        if (!data) {
-          throw new Error('Otrzymano puste dane z serwera');
-        }
-        
-        if (!Array.isArray(data)) {
-          console.warn('Nieoczekiwany format danych:', data);
-          setOffers([]);
-        } else {
-          setOffers(data);
-        }
-      } catch (err) {
-        console.error('Error fetching offers:', err);
-        setError(err.message || 'Nie udało się pobrać ofert subskrypcji. Spróbuj ponownie.');
-        toast.error('Problem z pobraniem ofert. Odświeżamy stronę...');
-        
-        // Fallback - po 3 sekundach spróbuj ponownie
-        setTimeout(() => {
-          window.location.reload();
-        }, 3000);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    
-    fetchOffers();
-  }, [filters, initialOffers]);
-
-  // Handle filter changes
+    try {
+      setIsLoading(true);
+      setError(null);
+      
+      const data = await fetchOffers(filters);
+      setOffers(data || []);
+    } catch (err) {
+      console.error('Error fetching offers:', err);
+      setError(err.message || 'Nie udało się pobrać ofert subskrypcji. Spróbuj ponownie.');
+      toast.error('Problem z pobraniem ofert. Odświeżamy stronę...');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [filters, initialOffers, fetchOffers]);
+  
+  // Efekt do pobierania ofert po zmianie filtrów
+  useEffect(() => {
+    loadOffers();
+  }, [loadOffers]);
+  
+  // Obsługa zmiany filtrów
   const handleFilterChange = (newFilters) => {
-    setFilters(prevFilters => ({
-      ...prevFilters,
-      ...newFilters
-    }));
-  };
-
-  // Handle error retry
-  const handleRetry = () => {
-    setError(null);
-    setFilters({
-      platformId: '',
-      minPrice: '',
-      maxPrice: '',
-      orderBy: 'created_at',
-      ascending: false
+    // Aktualizuj każdy filtr
+    Object.entries(newFilters).forEach(([key, value]) => {
+      setFilter(key, value);
     });
   };
-
-  // Render loading state
+  
+  // Obsługa błędów
+  const handleRetry = () => {
+    setError(null);
+    resetFilters();
+  };
+  
+  // Renderowanie stanu ładowania
   if (isLoading) {
     return (
       <div className="py-8">
@@ -140,8 +111,8 @@ const OffersList = ({ initialOffers = null, platformId = null }) => {
       </div>
     );
   }
-
-  // Render error state
+  
+  // Renderowanie stanu błędu
   if (error) {
     return (
       <div>
@@ -159,8 +130,8 @@ const OffersList = ({ initialOffers = null, platformId = null }) => {
       </div>
     );
   }
-
-  // Render empty state
+  
+  // Renderowanie pustej listy
   if (offers.length === 0) {
     return (
       <div>
@@ -174,8 +145,8 @@ const OffersList = ({ initialOffers = null, platformId = null }) => {
       </div>
     );
   }
-
-  // Render offers list
+  
+  // Renderowanie listy ofert
   return (
     <div>
       <FilterBar filters={filters} onFilterChange={handleFilterChange} />
@@ -191,8 +162,7 @@ const OffersList = ({ initialOffers = null, platformId = null }) => {
           <button 
             className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-md text-gray-700"
             onClick={() => {
-              // Implementacja ładowania większej liczby ofert
-              toast.info('Ładowanie większej liczby ofert...');
+              setFilter('limit', (filters.limit || 20) + 10);
             }}
           >
             Pokaż więcej ofert
@@ -201,6 +171,4 @@ const OffersList = ({ initialOffers = null, platformId = null }) => {
       )}
     </div>
   );
-};
-
-export default OffersList;
+}

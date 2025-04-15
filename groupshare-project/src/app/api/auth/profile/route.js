@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
-import { getUserByAuthId } from '../../../../lib/supabase-client';
-import supabaseAdmin from '../../../../lib/supabase-admin-client';
+import { getUserByAuthId } from '../../../../lib/database/supabase-client';
+import supabaseAdmin from '../../../../lib/database/supabase-admin-client';
 
 /**
  * GET /api/auth/profile
