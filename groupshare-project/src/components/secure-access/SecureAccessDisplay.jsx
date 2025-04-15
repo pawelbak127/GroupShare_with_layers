@@ -14,6 +14,7 @@ const SecureAccessDisplay = ({ applicationId, token }) => {
   const [timeLeft, setTimeLeft] = useState(300); // 5 minut w sekundach
   const [copied, setCopied] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [confirmationType, setConfirmationType] = useState(null);
 
   // Pobierz instrukcje po załadowaniu komponentu
   useEffect(() => {
@@ -101,6 +102,7 @@ const SecureAccessDisplay = ({ applicationId, token }) => {
       }
       
       setConfirmed(true);
+      setConfirmationType(isWorking);
       
       if (isWorking) {
         toast.success('Dziękujemy za potwierdzenie działającego dostępu!');
@@ -214,10 +216,26 @@ const SecureAccessDisplay = ({ applicationId, token }) => {
       {confirmed && (
         <div className="border-t border-gray-200 pt-4">
           <div className="flex">
-            <CheckIcon className="h-5 w-5 text-green-500 flex-shrink-0" />
-            <p className="ml-2 text-sm text-gray-600">
-              Dziękujemy za potwierdzenie. Zapisz te instrukcje w bezpiecznym miejscu.
-            </p>
+            {confirmationType ? (
+              <>
+                <CheckIcon className="h-5 w-5 text-green-500 flex-shrink-0" />
+                <p className="ml-2 text-sm text-gray-600">
+                  Dziękujemy za potwierdzenie. Zapisz te instrukcje w bezpiecznym miejscu.
+                </p>
+              </>
+            ) : (
+              <>
+                <ExclamationTriangleIcon className="h-5 w-5 text-amber-500 flex-shrink-0" />
+                <div className="ml-2">
+                  <p className="text-sm text-gray-600">
+                    Zgłoszenie problemu zostało przyjęte. Sprzedający został powiadomiony i skontaktuje się z Tobą wkrótce.
+                  </p>
+                  <p className="text-sm text-gray-600 mt-1 font-medium">
+                    Nie zostaniesz obciążony w przypadku braku rozwiązania problemu.
+                  </p>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

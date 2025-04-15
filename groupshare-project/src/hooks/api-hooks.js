@@ -194,37 +194,37 @@ export function useOffersApi() {
  * @returns {Object} Metody do interakcji z API płatności
  */
 export function usePaymentApi() {
-  /**
-   * Przetwarza płatność
-   * @param {string} purchaseId - ID zakupu
-   * @param {string} paymentMethod - Metoda płatności
-   * @returns {Promise<Object>} - Wynik płatności
-   */
-  const processPayment = useCallback(async (purchaseId, paymentMethod) => {
-    try {
-      const response = await fetch('/api/payments', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          purchaseId,
-          paymentMethod
-        })
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || errorData.error || 'Błąd podczas przetwarzania płatności');
+    /**
+     * Przetwarza płatność
+     * @param {string} purchaseId - ID zakupu
+     * @param {string} paymentMethod - Metoda płatności
+     * @returns {Promise<Object>} - Wynik płatności
+     */
+    const processPayment = useCallback(async (purchaseId, paymentMethod) => {
+      try {
+        const response = await fetch('/api/payments', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            purchaseId,
+            paymentMethod
+          })
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || errorData.error || 'Błąd podczas przetwarzania płatności');
+        }
+        
+        return await response.json();
+      } catch (error) {
+        console.error('Payment error:', error);
+        toast.error(error.message || 'Wystąpił błąd podczas przetwarzania płatności');
+        throw error;
       }
-      
-      return await response.json();
-    } catch (error) {
-      console.error('Payment error:', error);
-      toast.error(error.message || 'Wystąpił błąd podczas przetwarzania płatności');
-      throw error;
-    }
-  }, []);
+    }, []);
   
   /**
    * Potwierdza poprawność dostępu
