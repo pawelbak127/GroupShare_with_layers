@@ -294,4 +294,47 @@ class SupabaseGroupRepository extends RepositoryPort {
   
   /**
    * Zlicza subskrypcje grupy
-   * @param {string} groupI
+   * @param {string} groupId ID grupy
+   * @returns {Promise<number>} Liczba subskrypcji
+   */
+  async countSubscriptions(groupId) {
+    const { count, error } = await supabaseAdmin
+      .from('group_subs')
+      .select('*', { count: 'exact', head: true })
+      .eq('group_id', groupId);
+    
+    if (error) {
+      throw new Error(`Failed to count group subscriptions: ${error.message}`);
+    }
+    
+    return count || 0;
+  }
+  
+  /**
+   * Znajduje członków grupy
+   * @param {string} groupId ID grupy
+   * @returns {Promise<GroupMember[]>} Lista członków
+   */
+  async findMembers(groupId) {
+    const { data, error } = await supabaseAdmin
+      .from('group_members')
+      .select('*')
+      .eq('group_id', groupId);
+    
+    if (error) {
+      throw new Error(`Failed to fetch group members: ${error.message}`);
+    }
+    
+    return data.map(member => GroupMember.restore(
+      member.id,
+      member.group_id,
+      member.user_id,
+      member.role,
+      member.status,
+      new Date(member.created_at),
+      new Date(member.updated_at)
+    ));
+  }
+}
+
+export default SupabaseGroupRepository;

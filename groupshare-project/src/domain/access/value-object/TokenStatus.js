@@ -86,3 +86,4 @@ class TokenStatus extends ValueObject {
   toString() {
     return this._status;
   }
+}

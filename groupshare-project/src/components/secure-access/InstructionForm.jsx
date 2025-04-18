@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { toast } from 'react-hot-toast';
+import { toast } from '@/lib/utils/notification'
 
 /**
  * Formularz do wprowadzania instrukcji dostępowych dla oferty subskrypcji

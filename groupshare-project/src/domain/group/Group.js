@@ -2,7 +2,9 @@ const { AggregateRoot } = require('../shared/Entity');
 const { Id } = require('../shared/value-objects/Id');
 const { ValidationException, BusinessRuleViolationException } = require('../shared/exceptions/DomainException');
 const GroupStatus = require('./value-objects/GroupStatus');
+const GroupMember = require('./entities/GroupMember');
 const GroupCreatedEvent = require('./events/GroupCreatedEvent');
+const MemberAddedEvent = require('./events/MemberAddedEvent');
 
 /**
  * Group aggregate root
@@ -17,6 +19,7 @@ class Group extends AggregateRoot {
    * @param {Date} createdAt - Creation timestamp
    * @param {Date} updatedAt - Last update timestamp
    * @param {string} [description] - Group description
+   * @param {Array<GroupMember>} [members] - Group members
    * @private
    */
   constructor(
@@ -26,7 +29,8 @@ class Group extends AggregateRoot {
     status,
     createdAt,
     updatedAt,
-    description = ''
+    description = '',
+    members = []
   ) {
     super();
     this._id = id;
@@ -34,11 +38,9 @@ class Group extends AggregateRoot {
     this._ownerId = ownerId;
     this._status = status;
     this._description = description;
+    this._members = new Map(members.map(member => [member.userId, member]));
     this._createdAt = createdAt;
     this._updatedAt = updatedAt;
-    
-    // Validate state on creation
-    this.validateState();
   }
   
   /**
@@ -51,11 +53,11 @@ class Group extends AggregateRoot {
    * @throws {ValidationException} If validation fails
    */
   static create(id, name, ownerId, description = '') {
-    // Validate required fields
+    // Validate input
     const errors = {};
     
-    if (!name || name.trim().length < 3) {
-      errors.name = 'Group name must be at least 3 characters long';
+    if (!name || name.length < 3) {
+      errors.name = 'Group name must have at least 3 characters';
     }
     
     if (!ownerId) {
@@ -70,13 +72,25 @@ class Group extends AggregateRoot {
     
     const group = new Group(
       id,
-      name.trim(),
+      name,
       ownerId,
       GroupStatus.ACTIVE,
       now,
       now,
-      description ? description.trim() : ''
+      description
     );
+    
+    // Add the owner as a member with admin role
+    const memberId = Id.create();
+    const ownerMember = GroupMember.create(
+      memberId,
+      id.toString(),
+      ownerId,
+      'admin',
+      'active'
+    );
+    
+    group._members.set(ownerId, ownerMember);
     
     // Add domain event
     group.addDomainEvent(new GroupCreatedEvent(group));
@@ -93,6 +107,7 @@ class Group extends AggregateRoot {
    * @param {Date} createdAt - Creation timestamp
    * @param {Date} updatedAt - Last update timestamp
    * @param {string} [description] - Group description
+   * @param {Array<GroupMember>} [members] - Group members
    * @returns {Group} A restored Group instance
    */
   static restore(
@@ -102,7 +117,8 @@ class Group extends AggregateRoot {
     status,
     createdAt,
     updatedAt,
-    description = ''
+    description = '',
+    members = []
   ) {
     return new Group(
       Id.from(id),
@@ -111,7 +127,8 @@ class Group extends AggregateRoot {
       GroupStatus.fromString(status),
       new Date(createdAt),
       new Date(updatedAt),
-      description
+      description,
+      members
     );
   }
   
@@ -132,8 +149,8 @@ class Group extends AggregateRoot {
   }
   
   /**
-   * Get the owner ID
-   * @returns {string} The owner ID
+   * Get the owner user ID
+   * @returns {string} The owner user ID
    */
   get ownerId() {
     return this._ownerId;
@@ -156,6 +173,14 @@ class Group extends AggregateRoot {
   }
   
   /**
+   * Get all group members
+   * @returns {Array<GroupMember>} The group members
+   */
+  get members() {
+    return Array.from(this._members.values());
+  }
+  
+  /**
    * Get the creation timestamp
    * @returns {Date} The creation timestamp
    */
@@ -173,18 +198,16 @@ class Group extends AggregateRoot {
   
   /**
    * Update the group
-   * @param {Object} changes - The changes to apply
+   * @param {Object} changes - The group changes
    * @returns {void}
    * @throws {ValidationException} If validation fails
    */
   update(changes) {
     const errors = {};
     
-    // Validate name if provided
-    if (changes.name !== undefined) {
-      if (!changes.name || changes.name.trim().length < 3) {
-        errors.name = 'Group name must be at least 3 characters long';
-      }
+    // Validate changes
+    if (changes.name && changes.name.length < 3) {
+      errors.name = 'Group name must have at least 3 characters';
     }
     
     if (Object.keys(errors).length > 0) {
@@ -192,19 +215,19 @@ class Group extends AggregateRoot {
     }
     
     // Apply changes
-    if (changes.name !== undefined) {
-      this._name = changes.name.trim();
+    if (changes.name) {
+      this._name = changes.name;
     }
     
     if (changes.description !== undefined) {
-      this._description = changes.description ? changes.description.trim() : '';
+      this._description = changes.description;
     }
     
-    // Update timestamp
-    this._updatedAt = new Date();
+    if (changes.status) {
+      this._status = GroupStatus.fromString(changes.status);
+    }
     
-    // Validate the new state
-    this.validateState();
+    this._updatedAt = new Date();
   }
   
   /**
@@ -218,87 +241,166 @@ class Group extends AggregateRoot {
   }
   
   /**
-   * Archive the group
-   * @returns {void}
+   * Add a member to the group
+   * @param {Id} memberId - Member ID
+   * @param {string} userId - User ID
+   * @param {string} role - Member role
+   * @param {string} status - Membership status
+   * @returns {GroupMember} The added member
+   * @throws {BusinessRuleViolationException} If the user is already a member
    */
-  archive() {
-    this._status = GroupStatus.ARCHIVED;
+  addMember(memberId, userId, role = 'member', status = 'pending') {
+    // Check if the user is already a member
+    if (this._members.has(userId)) {
+      throw new BusinessRuleViolationException(
+        'User is already a member of this group',
+        'unique_membership'
+      );
+    }
+    
+    const member = GroupMember.create(
+      memberId,
+      this.id,
+      userId,
+      role,
+      status
+    );
+    
+    this._members.set(userId, member);
+    this._updatedAt = new Date();
+    
+    // Add domain event
+    this.addDomainEvent(new MemberAddedEvent(this, member));
+    
+    return member;
+  }
+  
+  /**
+   * Remove a member from the group
+   * @param {string} userId - User ID
+   * @returns {void}
+   * @throws {BusinessRuleViolationException} If the user is the owner
+   */
+  removeMember(userId) {
+    // Check if the user is the owner
+    if (userId === this._ownerId) {
+      throw new BusinessRuleViolationException(
+        'Cannot remove the owner from the group',
+        'owner_removal'
+      );
+    }
+    
+    // Check if the user is a member
+    if (!this._members.has(userId)) {
+      return; // User is not a member, nothing to do
+    }
+    
+    this._members.delete(userId);
     this._updatedAt = new Date();
   }
   
   /**
-   * Activate the group
+   * Update a member's role
+   * @param {string} userId - User ID
+   * @param {string} role - New role
    * @returns {void}
+   * @throws {BusinessRuleViolationException} If the user is not a member
    */
-  activate() {
-    this._status = GroupStatus.ACTIVE;
+  updateMemberRole(userId, role) {
+    // Check if the user is a member
+    if (!this._members.has(userId)) {
+      throw new BusinessRuleViolationException(
+        'User is not a member of this group',
+        'member_not_found'
+      );
+    }
+    
+    const member = this._members.get(userId);
+    member.changeRole(role);
     this._updatedAt = new Date();
   }
   
   /**
-   * Deactivate the group
+   * Update a member's status
+   * @param {string} userId - User ID
+   * @param {string} status - New status
    * @returns {void}
+   * @throws {BusinessRuleViolationException} If the user is not a member
    */
-  deactivate() {
-    this._status = GroupStatus.INACTIVE;
+  updateMemberStatus(userId, status) {
+    // Check if the user is a member
+    if (!this._members.has(userId)) {
+      throw new BusinessRuleViolationException(
+        'User is not a member of this group',
+        'member_not_found'
+      );
+    }
+    
+    const member = this._members.get(userId);
+    member.changeStatus(status);
     this._updatedAt = new Date();
   }
   
   /**
-   * Check if the group is active
-   * @returns {boolean} True if active
+   * Get a member by user ID
+   * @param {string} userId - User ID
+   * @returns {GroupMember|null} The member or null if not found
    */
-  isActive() {
-    return this._status.isActive();
+  getMember(userId) {
+    return this._members.get(userId) || null;
   }
   
   /**
-   * Transfer ownership to another user
-   * @param {string} newOwnerId - ID of the new owner
+   * Check if a user is a member
+   * @param {string} userId - User ID
+   * @returns {boolean} True if the user is a member
+   */
+  isMember(userId) {
+    return this._members.has(userId) && this._members.get(userId).isActive();
+  }
+  
+  /**
+   * Check if a user is an admin
+   * @param {string} userId - User ID
+   * @returns {boolean} True if the user is an admin
+   */
+  isAdmin(userId) {
+    const member = this._members.get(userId);
+    return member && member.isActive() && member.isAdmin();
+  }
+  
+  /**
+   * Check if a user is the owner
+   * @param {string} userId - User ID
+   * @returns {boolean} True if the user is the owner
+   */
+  isOwner(userId) {
+    return userId === this._ownerId;
+  }
+  
+  /**
+   * Transfer ownership to another member
+   * @param {string} newOwnerId - New owner user ID
    * @returns {void}
-   * @throws {BusinessRuleViolationException} If validation fails
+   * @throws {BusinessRuleViolationException} If the new owner is not a member
    */
   transferOwnership(newOwnerId) {
-    if (!newOwnerId) {
+    // Check if the new owner is a member
+    if (!this._members.has(newOwnerId)) {
       throw new BusinessRuleViolationException(
-        'New owner ID is required',
-        'transfer_ownership_validation'
+        'New owner must be a member of the group',
+        'owner_not_member'
       );
     }
     
-    if (newOwnerId === this._ownerId) {
-      throw new BusinessRuleViolationException(
-        'New owner cannot be the same as current owner',
-        'transfer_ownership_validation'
-      );
+    // Update the new owner's role to admin if not already
+    const newOwnerMember = this._members.get(newOwnerId);
+    if (!newOwnerMember.isAdmin()) {
+      newOwnerMember.changeRole('admin');
     }
     
+    // Update the owner ID
     this._ownerId = newOwnerId;
     this._updatedAt = new Date();
   }
-  
-  /**
-   * Validate the group state (invariants)
-   * @private
-   * @throws {BusinessRuleViolationException} If validation fails
-   */
-  validateState() {
-    // Invariant: Group must have a name of at least 3 characters
-    if (!this._name || this._name.trim().length < 3) {
-      throw new BusinessRuleViolationException(
-        'Group name must be at least 3 characters long',
-        'group_name_invariant'
-      );
-    }
-    
-    // Invariant: Group must have an owner
-    if (!this._ownerId) {
-      throw new BusinessRuleViolationException(
-        'Group must have an owner',
-        'group_owner_invariant'
-      );
-    }
-  }
 }
-
-module.exports = Group;
