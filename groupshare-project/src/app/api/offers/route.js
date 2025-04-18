@@ -1,20 +1,13 @@
-// src/app/api/offers/route.js
+// /src/app/api/offers/route.js
+
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
-import { offersRepository, userRepository } from '@/lib/database/supabase-client';
-import { handleApiError, apiResponse, validateRequestBody, protectApiRoute } from '@/lib/api/error-handler';
-import supabaseAdmin from '@/lib/database/supabase-admin-client';
-import crypto from 'crypto';
-
-// Schemat walidacji dla tworzenia oferty
-const createOfferSchema = {
-  groupId: { required: true },
-  platformId: { required: true },
-  slotsTotal: { required: true, type: 'number', min: 1 },
-  pricePerSlot: { required: true, type: 'number', min: 0.01 },
-  accessInstructions: { required: true, minLength: 10 },
-  currency: { type: 'string' }
-};
+import { UseCaseFactory } from '@/application/factories/UseCaseFactory';
+import { 
+  ListAvailableSubscriptionsRequestDTO,
+  CreateSubscriptionRequestDTO
+} from '@/application/use-cases/subscription';
+import { ErrorHandler } from '@/application/utils/ErrorHandler';
 
 /**
  * GET /api/offers
@@ -28,77 +21,50 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     console.log('Search params:', Object.fromEntries(searchParams.entries()));
     
-    // Przygotuj filtry na podstawie parametrów
-    const filters = {
-      platformId: searchParams.get('platformId'),
-      minPrice: searchParams.get('minPrice') ? parseFloat(searchParams.get('minPrice')) : undefined,
-      maxPrice: searchParams.get('maxPrice') ? parseFloat(searchParams.get('maxPrice')) : undefined,
-      availableSlots: searchParams.get('availableSlots') !== 'false', // Domyślnie true
-      orderBy: searchParams.get('orderBy') || 'created_at',
-      ascending: searchParams.get('ascending') === 'true',
-      limit: searchParams.get('limit') ? parseInt(searchParams.get('limit')) : 20,
-      page: searchParams.get('page') ? parseInt(searchParams.get('page')) : 1
-    };
+    // Przygotuj DTO żądania
+    const requestDTO = new ListAvailableSubscriptionsRequestDTO();
+    requestDTO.platformId = searchParams.get('platformId') || null;
+    requestDTO.minPrice = searchParams.get('minPrice') ? parseFloat(searchParams.get('minPrice')) : null;
+    requestDTO.maxPrice = searchParams.get('maxPrice') ? parseFloat(searchParams.get('maxPrice')) : null;
+    requestDTO.availableSlots = searchParams.get('availableSlots') !== 'false'; // Domyślnie true
+    requestDTO.orderBy = searchParams.get('orderBy') || 'created_at';
+    requestDTO.ascending = searchParams.get('ascending') === 'true';
+    requestDTO.page = searchParams.get('page') ? parseInt(searchParams.get('page')) : 1;
+    requestDTO.limit = searchParams.get('limit') ? parseInt(searchParams.get('limit')) : 20;
     
-    console.log('Processed filters:', filters);
+    // Pobierz przypadek użycia
+    const listSubscriptionsUseCase = UseCaseFactory.getListAvailableSubscriptionsUseCase();
     
-    // Oblicz offset na podstawie strony i limitu
-    filters.offset = (filters.page - 1) * filters.limit;
+    // Wykonaj przypadek użycia
+    const response = await listSubscriptionsUseCase.execute(requestDTO);
     
-    // Zbuduj zapytanie bazowe
-    let query = supabaseAdmin
-      .from('group_subs')
-      .select(`
-        *,
-        subscription_platforms(*),
-        groups(id, name),
-        owner:groups!inner(owner_id, user_profiles!inner(id, display_name, avatar_url, rating_avg, rating_count, verification_level))
-      `)
-      .eq('status', 'active');
+    // Transformuj odpowiedź do oczekiwanego formatu API
+    const offers = response.items.map(subscription => ({
+      id: subscription.id,
+      group_id: subscription.groupId,
+      group_name: subscription.groupName,
+      platform_id: subscription.platformId,
+      platform_name: subscription.platformName,
+      platform_icon: subscription.platformIcon,
+      status: subscription.status,
+      slots_total: subscription.slotsTotal,
+      slots_available: subscription.slotsAvailable,
+      price_per_slot: subscription.pricePerSlot,
+      currency: subscription.currency,
+      owner: subscription.owner,
+      created_at: subscription.createdAt
+    }));
     
-    // Zastosuj filtry
-    if (filters.platformId) {
-      query = query.eq('platform_id', filters.platformId);
-    }
-    
-    if (filters.minPrice !== undefined) {
-      query = query.gte('price_per_slot', filters.minPrice);
-    }
-    
-    if (filters.maxPrice !== undefined) {
-      query = query.lte('price_per_slot', filters.maxPrice);
-    }
-    
-    if (filters.availableSlots) {
-      query = query.gt('slots_available', 0);
-    }
-    
-    // Sortowanie
-    query = query.order(filters.orderBy, { ascending: filters.ascending });
-    
-    // Paginacja
-    query = query.range(filters.offset, filters.offset + filters.limit - 1);
-    
-    console.log('Executing Supabase query');
-    
-    // Wykonaj zapytanie
-    const { data, error, count } = await query;
-    
-    if (error) {
-      console.error('Supabase error:', error);
-      return handleApiError(error, 'Nie udało się pobrać ofert subskrypcji');
-    }
-    
-    console.log(`Query successful, returned ${data?.length || 0} offers`);
-    
-    // Upewnij się, że zawsze zwracamy tablicę
-    const offers = Array.isArray(data) ? data : [];
-    
-    // Używamy apiResponse, aby zapewnić spójny format odpowiedzi
-    return apiResponse(offers);
+    return NextResponse.json(offers);
   } catch (error) {
     console.error('Unexpected error in /api/offers:', error);
-    return handleApiError(error, 'Nie udało się pobrać ofert subskrypcji');
+    
+    // Obsłuż błąd
+    const errorResponse = ErrorHandler.handleError(error);
+    return NextResponse.json(
+      { error: errorResponse.error, details: errorResponse.details },
+      { status: errorResponse.status }
+    );
   }
 }
 
@@ -107,223 +73,79 @@ export async function GET(request) {
  * Tworzy nową ofertę subskrypcji
  */
 export async function POST(request) {
-  // Używamy protectApiRoute do zabezpieczenia endpointu z uwierzytelnianiem i walidacją
-  return protectApiRoute(async (req) => {
-    try {
-      // Pobierz dane z żądania (już zwalidowane przez protectApiRoute)
-      const body = await req.json();
-      
-      // Dodatkowa walidacja
-      const { isValid, errors } = validateRequestBody(createOfferSchema, body);
-      if (!isValid) {
-        return NextResponse.json(
-          { error: 'Validation error', details: errors },
-          { status: 400 }
-        );
-      }
-      
-      // Pobierz użytkownika z Clerk
-      const user = await currentUser();
-      
-      // Pobierz profil użytkownika
-      const userProfile = await userRepository.getByAuthId(user.id);
-      if (!userProfile) {
-        return NextResponse.json(
-          { error: 'User profile not found' },
-          { status: 404 }
-        );
-      }
-      
-      // Sprawdź, czy użytkownik jest właścicielem lub adminem grupy
-      const isAuthorized = await checkGroupPermission(body.groupId, userProfile.id);
-      if (!isAuthorized) {
-        return NextResponse.json(
-          { error: 'You do not have permission to create offers for this group' },
-          { status: 403 }
-        );
-      }
-      
-      // Przygotuj dane oferty
-      const offerData = {
-        group_id: body.groupId,
-        platform_id: body.platformId,
-        status: 'active',
-        slots_total: body.slotsTotal,
-        slots_available: body.slotsTotal,
-        price_per_slot: body.pricePerSlot,
-        currency: body.currency || 'PLN',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+  try {
+    // Sprawdź autentykację
+    const user = await currentUser();
+    if (!user) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+    
+    // Pobierz dane z żądania
+    const body = await request.json();
+    
+    // Pobierz repozytorium użytkowników
+    const userRepository = UseCaseFactory.getUserRepository();
+    
+    // Znajdź lub utwórz profil użytkownika
+    let userProfile = await userRepository.findByExternalAuthId(user.id);
+    
+    if (!userProfile) {
+      // Użyj przypadku użycia do utworzenia profilu
+      const createUserUseCase = UseCaseFactory.getCreateUserUseCase();
+      const createUserDTO = {
+        externalAuthId: user.id,
+        displayName: user.firstName 
+          ? `${user.firstName} ${user.lastName || ''}`.trim() 
+          : (user.username || 'Nowy użytkownik'),
+        email: user.emailAddresses[0]?.emailAddress || '',
+        profileType: 'both'
       };
       
-      // Utwórz ofertę
-      const createdOffer = await offersRepository.create(offerData);
-      if (!createdOffer) {
-        throw new Error('Failed to create subscription offer');
-      }
-      
-      // Zapisz instrukcje dostępu
-      await saveAccessInstructions(createdOffer.id, body.accessInstructions);
-      
-      // Zaloguj operację
-      await logSecurityEvent(userProfile.id, 'create', 'group_sub', createdOffer.id, {
-        group_id: body.groupId
-      });
-      
-      return apiResponse(createdOffer, 201, 'Oferta subskrypcji została utworzona pomyślnie');
-    } catch (error) {
-      return handleApiError(error, 'Failed to create subscription offer');
-    }
-  })(request, {});
-}
-
-/**
- * Sprawdza uprawnienia użytkownika w grupie
- * @param {string} groupId - ID grupy
- * @param {string} userId - ID użytkownika
- * @returns {Promise<boolean>} - Czy użytkownik ma uprawnienia
- */
-async function checkGroupPermission(groupId, userId) {
-  try {
-    // Sprawdź, czy użytkownik jest właścicielem grupy
-    const { data: group } = await supabaseAdmin
-      .from('groups')
-      .select('owner_id')
-      .eq('id', groupId)
-      .single();
-    
-    if (group && group.owner_id === userId) {
-      return true;
+      const result = await createUserUseCase.execute(createUserDTO);
+      userProfile = await userRepository.findById(result.id);
     }
     
-    // Jeśli nie jest właścicielem, sprawdź czy jest adminem
-    const { data: membership } = await supabaseAdmin
-      .from('group_members')
-      .select('role')
-      .eq('group_id', groupId)
-      .eq('user_id', userId)
-      .eq('status', 'active')
-      .single();
+    // Przygotuj DTO żądania
+    const requestDTO = new CreateSubscriptionRequestDTO();
+    requestDTO.groupId = body.groupId;
+    requestDTO.platformId = body.platformId;
+    requestDTO.slotsTotal = body.slotsTotal;
+    requestDTO.pricePerSlot = body.pricePerSlot;
+    requestDTO.currency = body.currency || 'PLN';
+    requestDTO.accessInstructions = body.accessInstructions;
+    requestDTO.userId = userProfile.id;
     
-    return membership && membership.role === 'admin';
+    // Pobierz przypadek użycia
+    const createSubscriptionUseCase = UseCaseFactory.getCreateSubscriptionUseCase();
+    
+    // Wykonaj przypadek użycia
+    const response = await createSubscriptionUseCase.execute(requestDTO);
+    
+    // Transformuj odpowiedź do oczekiwanego formatu API
+    const offer = {
+      id: response.id,
+      group_id: response.groupId,
+      platform_id: response.platformId,
+      status: response.status,
+      slots_total: response.slotsTotal,
+      slots_available: response.slotsAvailable,
+      price_per_slot: response.pricePerSlot,
+      currency: response.currency,
+      created_at: response.createdAt
+    };
+    
+    return NextResponse.json(offer, { status: 201 });
   } catch (error) {
-    console.error('Error checking group permission:', error);
-    return false;
+    console.error('Unexpected error in POST /api/offers:', error);
+    
+    // Obsłuż błąd
+    const errorResponse = ErrorHandler.handleError(error);
+    return NextResponse.json(
+      { error: errorResponse.error, details: errorResponse.details },
+      { status: errorResponse.status }
+    );
   }
-}
-
-/**
- * Zapisuje instrukcje dostępu dla oferty
- * @param {string} groupSubId - ID oferty
- * @param {string} instructions - Instrukcje dostępu
- * @returns {Promise<boolean>} - Czy operacja się powiodła
- */
-async function saveAccessInstructions(groupSubId, instructions) {
-  try {
-    // Pobierz lub wygeneruj klucz szyfrowania
-    let encryptionKeyId;
-    const { data: existingKey } = await supabaseAdmin
-      .from('encryption_keys')
-      .select('id')
-      .eq('key_type', 'master')
-      .eq('active', true)
-      .single();
-    
-    if (existingKey) {
-      encryptionKeyId = existingKey.id;
-    } else {
-      // Generuj nowy klucz
-      const newKey = {
-        key_type: 'master',
-        public_key: 'dummy_public_key_' + Math.random().toString(36).substring(2),
-        private_key_enc: 'dummy_encrypted_private_key_' + Math.random().toString(36).substring(2),
-        active: true,
-        created_at: new Date().toISOString()
-      };
-      
-      const { data: createdKey } = await supabaseAdmin
-        .from('encryption_keys')
-        .insert([newKey])
-        .select('id')
-        .single();
-        
-      encryptionKeyId = createdKey?.id;
-    }
-    
-    if (!encryptionKeyId) {
-      throw new Error('Failed to get or create encryption key');
-    }
-    
-    // "Szyfrowanie" instrukcji
-    const encryptedData = 'ENCRYPTED:' + Buffer.from(instructions).toString('base64');
-    const iv = generateRandomBytes(16).toString('hex');
-    const dataKeyEnc = 'dummy_key_enc_' + Math.random().toString(36).substring(2);
-    
-    // Zapisz instrukcje
-    const { error } = await supabaseAdmin
-      .from('access_instructions')
-      .insert({
-        group_sub_id: groupSubId,
-        encrypted_data: encryptedData,
-        data_key_enc: dataKeyEnc,
-        encryption_key_id: encryptionKeyId,
-        iv: iv,
-        encryption_version: '1.0',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      });
-    
-    return !error;
-  } catch (error) {
-    console.error('Error saving access instructions:', error);
-    // Kontynuujemy mimo błędu, główna funkcjonalność została wykonana
-    return false;
-  }
-}
-
-/**
- * Loguje zdarzenie bezpieczeństwa
- * @param {string} userId - ID użytkownika
- * @param {string} actionType - Typ akcji
- * @param {string} resourceType - Typ zasobu
- * @param {string} resourceId - ID zasobu
- * @param {Object} details - Dodatkowe szczegóły
- */
-async function logSecurityEvent(userId, actionType, resourceType, resourceId, details = {}) {
-  try {
-    await supabaseAdmin
-      .from('security_logs')
-      .insert({
-        user_id: userId,
-        action_type: actionType,
-        resource_type: resourceType,
-        resource_id: String(resourceId),
-        status: 'success',
-        details: details,
-        created_at: new Date().toISOString()
-      });
-  } catch (error) {
-    console.error('Error logging security event:', error);
-  }
-}
-
-/**
- * Funkcja generująca losowe bajty (alternatywa dla crypto.randomBytes)
- * Zmieniono nazwę z crypto() na generateRandomBytes() aby uniknąć konfliktu
- */
-function generateRandomBytes(size) {
-  const values = new Uint8Array(size);
-  for (let i = 0; i < size; i++) {
-    values[i] = Math.floor(Math.random() * 256);
-  }
-  return {
-    toString: (encoding) => {
-      if (encoding === 'hex') {
-        return Array.from(values)
-          .map(b => b.toString(16).padStart(2, '0'))
-          .join('');
-      }
-      return String.fromCharCode.apply(null, values);
-    }
-  };
 }

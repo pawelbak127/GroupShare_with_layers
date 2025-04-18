@@ -1,7 +1,13 @@
-// src/app/api/groups/route.js
+// /src/app/api/groups/route.js
+
 import { NextResponse } from 'next/server';
 import { currentUser } from '@clerk/nextjs/server';
-import supabaseAdmin from '@/lib/database/supabase-admin-client';
+import { UseCaseFactory } from '@/application/factories/UseCaseFactory';
+import { 
+  CreateGroupRequestDTO, 
+  ListUserGroupsRequestDTO 
+} from '@/application/use-cases/group';
+import { ErrorHandler } from '@/application/utils/ErrorHandler';
 
 /**
  * GET /api/groups
@@ -20,123 +26,62 @@ export async function GET(request) {
     
     console.log('Fetching groups for user:', user.id);
     
-    // Pobierz profil użytkownika
-    const { data: userProfile, error: profileError } = await supabaseAdmin
-      .from('user_profiles')
-      .select('id')
-      .eq('external_auth_id', user.id)
-      .single();
+    // Pobierz repozytorium użytkowników
+    const userRepository = UseCaseFactory.getUserRepository();
     
-    if (profileError) {
-      console.error('Error fetching user profile:', profileError);
-      return NextResponse.json(
-        { error: 'Failed to fetch user profile', details: profileError },
-        { status: 500 }
-      );
+    // Znajdź lub utwórz profil użytkownika
+    let userProfile = await userRepository.findByExternalAuthId(user.id);
+    
+    if (!userProfile) {
+      // Użyj przypadku użycia do utworzenia profilu
+      const createUserUseCase = UseCaseFactory.getCreateUserUseCase();
+      const createUserDTO = {
+        externalAuthId: user.id,
+        displayName: user.firstName 
+          ? `${user.firstName} ${user.lastName || ''}`.trim() 
+          : (user.username || 'Nowy użytkownik'),
+        email: user.emailAddresses[0]?.emailAddress || '',
+        profileType: 'both'
+      };
+      
+      const result = await createUserUseCase.execute(createUserDTO);
+      userProfile = await userRepository.findById(result.id);
     }
     
     console.log('User profile ID:', userProfile.id);
     
-    // Grupy, których użytkownik jest właścicielem
-    let ownedGroups = [];
-    try {
-      const { data: owned, error: ownedError } = await supabaseAdmin
-        .from('groups')
-        .select(`
-          id,
-          name,
-          description,
-          created_at,
-          owner_id
-        `)
-        .eq('owner_id', userProfile.id);
-      
-      if (ownedError) {
-        console.error('Error fetching owned groups:', ownedError);
-        return NextResponse.json(
-          { error: 'Failed to fetch owned groups', details: ownedError },
-          { status: 500 }
-        );
-      }
-      
-      // Dodaj informacje o roli i uzupełnij dane
-      ownedGroups = owned.map(group => ({
-        ...group,
-        isOwner: true,
-        role: 'owner'
-      }));
-    } catch (error) {
-      console.error('Exception fetching owned groups:', error);
-    }
+    // Przygotuj DTO żądania
+    const requestDTO = new ListUserGroupsRequestDTO();
+    requestDTO.userId = userProfile.id;
     
-    // Grupy, których użytkownik jest członkiem
-    let memberGroups = [];
-    try {
-      const { data: memberships, error: membershipError } = await supabaseAdmin
-        .from('group_members')
-        .select(`
-          role,
-          group:groups(
-            id, 
-            name,
-            description,
-            created_at,
-            owner_id
-          )
-        `)
-        .eq('user_id', userProfile.id)
-        .eq('status', 'active');
-      
-      if (membershipError) {
-        console.error('Error fetching group memberships:', membershipError);
-      } else {
-        // Formatuj dane grup, do których użytkownik należy
-        memberGroups = memberships
-          .filter(m => m.group) // Odfiltruj null/undefined
-          .map(membership => ({
-            ...membership.group,
-            isOwner: false,
-            role: membership.role
-          }));
-      }
-    } catch (error) {
-      console.error('Exception fetching member groups:', error);
-    }
+    // Pobierz przypadek użycia
+    const listGroupsUseCase = UseCaseFactory.getListUserGroupsUseCase();
     
-    // Pobierz dodatkowe informacje o grupach - liczba subskrypcji, członków itp.
-    const allGroups = [...ownedGroups, ...memberGroups];
-    const enrichedGroups = await Promise.all(allGroups.map(async (group) => {
-      try {
-        // Liczba członków grupy
-        const { count: memberCount } = await supabaseAdmin
-          .from('group_members')
-          .select('id', { count: 'exact', head: true })
-          .eq('group_id', group.id)
-          .eq('status', 'active');
-        
-        // Liczba subskrypcji grupy
-        const { count: subscriptionCount } = await supabaseAdmin
-          .from('group_subs')
-          .select('id', { count: 'exact', head: true })
-          .eq('group_id', group.id);
-        
-        return {
-          ...group,
-          member_count: memberCount || 0,
-          subscription_count: subscriptionCount || 0
-        };
-      } catch (error) {
-        console.error(`Error enriching group ${group.id}:`, error);
-        return group;
-      }
+    // Wykonaj przypadek użycia
+    const response = await listGroupsUseCase.execute(requestDTO);
+    
+    // Transformuj odpowiedź do oczekiwanego formatu API
+    const groups = response.groups.map(group => ({
+      id: group.id,
+      name: group.name,
+      description: group.description,
+      created_at: group.createdAt,
+      owner_id: group.ownerId,
+      isOwner: group.isOwner,
+      role: group.role,
+      member_count: group.memberCount,
+      subscription_count: group.subscriptionCount
     }));
     
-    return NextResponse.json(enrichedGroups);
+    return NextResponse.json(groups);
   } catch (error) {
     console.error('Unexpected error in /api/groups:', error);
+    
+    // Obsłuż błąd
+    const errorResponse = ErrorHandler.handleError(error);
     return NextResponse.json(
-      { error: 'An unexpected error occurred', details: error.message },
-      { status: 500 }
+      { error: errorResponse.error, details: errorResponse.details },
+      { status: errorResponse.status }
     );
   }
 }
@@ -159,83 +104,60 @@ export async function POST(request) {
     // Pobierz dane z żądania
     const body = await request.json();
     
-    // Podstawowa walidacja
-    if (!body.name || body.name.trim().length < 3) {
-      return NextResponse.json(
-        { error: 'Group name is required and must be at least 3 characters long' },
-        { status: 400 }
-      );
+    // Pobierz repozytorium użytkowników
+    const userRepository = UseCaseFactory.getUserRepository();
+    
+    // Znajdź lub utwórz profil użytkownika
+    let userProfile = await userRepository.findByExternalAuthId(user.id);
+    
+    if (!userProfile) {
+      // Użyj przypadku użycia do utworzenia profilu
+      const createUserUseCase = UseCaseFactory.getCreateUserUseCase();
+      const createUserDTO = {
+        externalAuthId: user.id,
+        displayName: user.firstName 
+          ? `${user.firstName} ${user.lastName || ''}`.trim() 
+          : (user.username || 'Nowy użytkownik'),
+        email: user.emailAddresses[0]?.emailAddress || '',
+        profileType: 'both'
+      };
+      
+      const result = await createUserUseCase.execute(createUserDTO);
+      userProfile = await userRepository.findById(result.id);
     }
     
-    // Pobierz profil użytkownika
-    const { data: userProfile, error: profileError } = await supabaseAdmin
-      .from('user_profiles')
-      .select('id')
-      .eq('external_auth_id', user.id)
-      .single();
+    // Przygotuj DTO żądania
+    const requestDTO = new CreateGroupRequestDTO();
+    requestDTO.name = body.name;
+    requestDTO.description = body.description;
+    requestDTO.userId = userProfile.id;
     
-    if (profileError) {
-      console.error('Error fetching user profile:', profileError);
-      return NextResponse.json(
-        { error: 'Failed to fetch user profile', details: profileError },
-        { status: 500 }
-      );
-    }
+    // Pobierz przypadek użycia
+    const createGroupUseCase = UseCaseFactory.getCreateGroupUseCase();
     
-    // Przygotuj dane grupy - używając tylko kolumn, które faktycznie istnieją w tabeli
-    const groupData = {
-      name: body.name.trim(),
-      description: body.description?.trim() || null,
-      owner_id: userProfile.id,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
+    // Wykonaj przypadek użycia
+    const response = await createGroupUseCase.execute(requestDTO);
     
-    // Utwórz grupę
-    const { data: group, error: createError } = await supabaseAdmin
-      .from('groups')
-      .insert([groupData])
-      .select()
-      .single();
-    
-    if (createError) {
-      console.error('Error creating group:', createError);
-      return NextResponse.json(
-        { error: 'Failed to create group', details: createError },
-        { status: 500 }
-      );
-    }
-    
-    // Dodaj właściciela jako członka grupy
-    const { error: memberError } = await supabaseAdmin
-      .from('group_members')
-      .insert({
-        group_id: group.id,
-        user_id: userProfile.id,
-        role: 'admin', // Właściciel jest automatycznie adminem
-        status: 'active',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      });
-    
-    if (memberError) {
-      console.error('Error adding owner as member:', memberError);
-      // Kontynuujemy mimo błędu - grupa została utworzona
-    }
-    
-    // Dodaj informacje o roli
-    const enrichedGroup = {
-      ...group,
+    // Transformuj odpowiedź do oczekiwanego formatu API
+    const group = {
+      id: response.id,
+      name: response.name,
+      description: response.description,
+      created_at: response.createdAt,
+      owner_id: response.ownerId,
       isOwner: true,
-      role: 'admin'
+      role: response.role
     };
     
-    return NextResponse.json(enrichedGroup, { status: 201 });
+    return NextResponse.json(group, { status: 201 });
   } catch (error) {
     console.error('Unexpected error in POST /api/groups:', error);
+    
+    // Obsłuż błąd
+    const errorResponse = ErrorHandler.handleError(error);
     return NextResponse.json(
-      { error: 'An unexpected error occurred', details: error.message },
-      { status: 500 }
+      { error: errorResponse.error, details: errorResponse.details },
+      { status: errorResponse.status }
     );
   }
 }
