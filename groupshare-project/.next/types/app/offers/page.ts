@@ -1,4 +1,4 @@
-// File: C:\Users\bacze\Project\GroupShare\groupshare-project\src\app\offers\page.jsx
+// File: C:\Users\bacze\Project\GroupShare_with_layers\groupshare-project\src\app\offers\page.jsx
 import * as entry from '../../../../src/app/offers/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

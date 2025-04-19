@@ -9,14 +9,14 @@ const TokenService = require('../services/TokenService');
 const AccessInstructionService = require('../services/AccessInstructionService');
 
 // Importy repozytoriów i zapytań
-const UserRepository = require('../../infrastructure/persistence/supabase/SupabaseUserRepository');
-const GroupRepository = require('../../infrastructure/persistence/supabase/SupabaseGroupRepository');
+const UserRepository = require('../../infrastructure/repositories/SupabaseUserRepository');
+const GroupRepository = require('../../infrastructure/repositories/SupabaseGroupRepository');
 const SubscriptionRepository = require('../../infrastructure/persistence/supabase/SupabaseSubscriptionRepository');
-const PurchaseRepository = require('../../infrastructure/persistence/supabase/SupabasePurchaseRepository');
-const TransactionRepository = require('../../infrastructure/persistence/supabase/SupabaseTransactionRepository');
-const PlatformRepository = require('../../infrastructure/persistence/supabase/SupabasePlatformRepository');
-const AccessInstructionRepository = require('../../infrastructure/persistence/supabase/SupabaseAccessInstructionRepository');
-const AccessTokenRepository = require('../../infrastructure/persistence/supabase/SupabaseAccessTokenRepository');
+const PurchaseRepository = require('../../infrastructure/repositories/SupabasePurchaseRepository');
+const TransactionRepository = require('../../infrastructure/repositories/SupabaseTransactionRepository');
+const PlatformRepository = require('../../infrastructure/repositories/SupabasePlatformRepository');
+const AccessInstructionRepository = require('../../infrastructure/repositories/SupabaseAccessInstructionRepository');
+const AccessTokenRepository = require('../../infrastructure/repositories/SupabaseAccessTokenRepository');
 
 const SubscriptionQueries = require('../../infrastructure/queries/supabase/SupabaseSubscriptionQueries');
 const PurchaseQueries = require('../../infrastructure/queries/supabase/SupabasePurchaseQueries');
