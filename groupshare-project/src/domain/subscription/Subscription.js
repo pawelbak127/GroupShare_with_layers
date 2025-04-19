@@ -1,3 +1,5 @@
+// src/domain/subscription/Subscription.js
+
 const { AggregateRoot } = require('../shared/Entity');
 const { Id } = require('../shared/value-objects/Id');
 const { Money } = require('../shared/value-objects/Money');
@@ -13,16 +15,7 @@ const SlotsPurchasedEvent = require('./events/SlotsPurchasedEvent');
  */
 class Subscription extends AggregateRoot {
   /**
-   * @param {Id} id - Subscription ID
-   * @param {string} groupId - Group ID
-   * @param {string} platformId - Platform ID
-   * @param {SubscriptionStatus} status - Subscription status
-   * @param {number} slotsTotal - Total number of slots
-   * @param {number} slotsAvailable - Number of available slots
-   * @param {Money} pricePerSlot - Price per slot
-   * @param {Date} createdAt - Creation timestamp
-   * @param {Date} updatedAt - Last update timestamp
-   * @param {AccessInstructions} [accessInstructions] - Access instructions
+   * Prywatny konstruktor - używany tylko przez metody fabryczne
    * @private
    */
   constructor(
@@ -51,18 +44,89 @@ class Subscription extends AggregateRoot {
   }
   
   /**
-   * Create a new subscription
-   * @param {Id} id - Subscription ID
-   * @param {string} groupId - Group ID
-   * @param {string} platformId - Platform ID
-   * @param {number} slotsTotal - Total number of slots
-   * @param {number} pricePerSlot - Price per slot
-   * @param {string} currency - Currency code
-   * @returns {Subscription} A new Subscription instance
-   * @throws {ValidationException} If validation fails
+   * Metoda fabryczna dla tworzenia nowej subskrypcji
+   * @public
    */
-  static create(id, groupId, platformId, slotsTotal, pricePerSlot, currency = 'PLN') {
-    // Validate input
+  static create(groupId, platformId, slotsTotal, pricePerSlot, currency = 'PLN') {
+    // Walidacja wejścia
+    this.validateCreationParams(groupId, platformId, slotsTotal, pricePerSlot);
+    
+    const id = Id.create();
+    const now = new Date();
+    
+    const subscription = new Subscription(
+      id,
+      groupId,
+      platformId,
+      SubscriptionStatus.ACTIVE,
+      slotsTotal,
+      slotsTotal, // Początkowo wszystkie sloty są dostępne
+      Money.create(pricePerSlot, currency),
+      now,
+      now
+    );
+    
+    // Dodaj zdarzenie domenowe
+    subscription.addDomainEvent(new SubscriptionCreatedEvent(subscription));
+    
+    return subscription;
+  }
+  
+  /**
+   * Metoda fabryczna do przywracania encji z bazy danych
+   * @public
+   */
+  static restore(
+    id,
+    groupId,
+    platformId,
+    status,
+    slotsTotal,
+    slotsAvailable,
+    pricePerSlot,
+    currency,
+    createdAt,
+    updatedAt,
+    accessInstructionsData = null
+  ) {
+    // Przywracanie obiektu bez walidacji biznesowej
+    // Zakładamy, że dane z bazy są poprawne
+    
+    // Przywróć obiekty wartości
+    const idObj = Id.from(id);
+    const statusObj = SubscriptionStatus.fromString(status);
+    const priceObj = Money.create(pricePerSlot, currency);
+    
+    // Przywróć instrukcje dostępu, jeśli istnieją
+    let accessInstructions = null;
+    if (accessInstructionsData) {
+      accessInstructions = AccessInstructions.fromEncrypted(
+        accessInstructionsData.encryptedData,
+        accessInstructionsData.encryptionKeyId,
+        accessInstructionsData.iv,
+        accessInstructionsData.encryptionVersion
+      );
+    }
+    
+    return new Subscription(
+      idObj,
+      groupId,
+      platformId,
+      statusObj,
+      slotsTotal,
+      slotsAvailable,
+      priceObj,
+      new Date(createdAt),
+      new Date(updatedAt),
+      accessInstructions
+    );
+  }
+  
+  /**
+   * Walidacja parametrów tworzenia subskrypcji
+   * @private
+   */
+  static validateCreationParams(groupId, platformId, slotsTotal, pricePerSlot) {
     const errors = {};
     
     if (!groupId) {
@@ -84,170 +148,15 @@ class Subscription extends AggregateRoot {
     if (Object.keys(errors).length > 0) {
       throw new ValidationException('Invalid subscription data', errors);
     }
-    
-    const now = new Date();
-    
-    const subscription = new Subscription(
-      id,
-      groupId,
-      platformId,
-      SubscriptionStatus.ACTIVE,
-      slotsTotal,
-      slotsTotal, // Initially, all slots are available
-      Money.create(pricePerSlot, currency),
-      now,
-      now
-    );
-    
-    // Add domain event
-    subscription.addDomainEvent(new SubscriptionCreatedEvent(subscription));
-    
-    return subscription;
   }
   
   /**
-   * Restore a subscription from persistence
-   * @param {string} id - Subscription ID
-   * @param {string} groupId - Group ID
-   * @param {string} platformId - Platform ID
-   * @param {string} status - Subscription status
-   * @param {number} slotsTotal - Total number of slots
-   * @param {number} slotsAvailable - Number of available slots
-   * @param {number} pricePerSlot - Price per slot
-   * @param {string} currency - Currency code
-   * @param {Date} createdAt - Creation timestamp
-   * @param {Date} updatedAt - Last update timestamp
-   * @param {Object} [accessInstructionsData] - Access instructions data
-   * @returns {Subscription} A restored Subscription instance
+   * Waliduje parametry aktualizacji
+   * @private
    */
-  static restore(
-    id,
-    groupId,
-    platformId,
-    status,
-    slotsTotal,
-    slotsAvailable,
-    pricePerSlot,
-    currency,
-    createdAt,
-    updatedAt,
-    accessInstructionsData = null
-  ) {
-    // Create access instructions if data is provided
-    let accessInstructions = null;
-    if (accessInstructionsData) {
-      accessInstructions = AccessInstructions.fromEncrypted(
-        accessInstructionsData.encryptedData,
-        accessInstructionsData.encryptionKeyId,
-        accessInstructionsData.iv,
-        accessInstructionsData.encryptionVersion
-      );
-    }
-    
-    return new Subscription(
-      Id.from(id),
-      groupId,
-      platformId,
-      SubscriptionStatus.fromString(status),
-      slotsTotal,
-      slotsAvailable,
-      Money.create(pricePerSlot, currency),
-      new Date(createdAt),
-      new Date(updatedAt),
-      accessInstructions
-    );
-  }
-  
-  /**
-   * Get the subscription ID
-   * @returns {string} The subscription ID
-   */
-  get id() {
-    return this._id.toString();
-  }
-  
-  /**
-   * Get the group ID
-   * @returns {string} The group ID
-   */
-  get groupId() {
-    return this._groupId;
-  }
-  
-  /**
-   * Get the platform ID
-   * @returns {string} The platform ID
-   */
-  get platformId() {
-    return this._platformId;
-  }
-  
-  /**
-   * Get the subscription status
-   * @returns {SubscriptionStatus} The subscription status
-   */
-  get status() {
-    return this._status;
-  }
-  
-  /**
-   * Get the total number of slots
-   * @returns {number} The total number of slots
-   */
-  get slotsTotal() {
-    return this._slotsTotal;
-  }
-  
-  /**
-   * Get the number of available slots
-   * @returns {number} The number of available slots
-   */
-  get slotsAvailable() {
-    return this._slotsAvailable;
-  }
-  
-  /**
-   * Get the price per slot
-   * @returns {Money} The price per slot
-   */
-  get pricePerSlot() {
-    return this._pricePerSlot;
-  }
-  
-  /**
-   * Get the access instructions
-   * @returns {AccessInstructions|null} The access instructions
-   */
-  get accessInstructions() {
-    return this._accessInstructions;
-  }
-  
-  /**
-   * Get the creation timestamp
-   * @returns {Date} The creation timestamp
-   */
-  get createdAt() {
-    return new Date(this._createdAt);
-  }
-  
-  /**
-   * Get the last update timestamp
-   * @returns {Date} The last update timestamp
-   */
-  get updatedAt() {
-    return new Date(this._updatedAt);
-  }
-  
-  /**
-   * Update the subscription
-   * @param {Object} changes - The subscription changes
-   * @returns {void}
-   * @throws {ValidationException} If validation fails
-   */
-  update(changes) {
+  validateUpdateParams(changes) {
     const errors = {};
     
-    // Validate changes
     if (changes.slotsTotal !== undefined && changes.slotsTotal <= 0) {
       errors.slotsTotal = 'Total slots must be greater than zero';
     }
@@ -265,8 +174,57 @@ class Subscription extends AggregateRoot {
     if (Object.keys(errors).length > 0) {
       throw new ValidationException('Invalid subscription data', errors);
     }
+  }
+  
+  // Standardowe gettery
+  get id() {
+    return this._id.toString();
+  }
+  
+  get groupId() {
+    return this._groupId;
+  }
+  
+  get platformId() {
+    return this._platformId;
+  }
+  
+  get status() {
+    return this._status;
+  }
+  
+  get slotsTotal() {
+    return this._slotsTotal;
+  }
+  
+  get slotsAvailable() {
+    return this._slotsAvailable;
+  }
+  
+  get pricePerSlot() {
+    return this._pricePerSlot;
+  }
+  
+  get accessInstructions() {
+    return this._accessInstructions;
+  }
+  
+  get createdAt() {
+    return new Date(this._createdAt);
+  }
+  
+  get updatedAt() {
+    return new Date(this._updatedAt);
+  }
+  
+  /**
+   * Aktualizacja subskrypcji
+   */
+  update(changes) {
+    // Wywołanie wydzielonej walidacji
+    this.validateUpdateParams(changes);
     
-    // Apply changes
+    // Aplikacja zmian po walidacji
     if (changes.status) {
       this._status = SubscriptionStatus.fromString(changes.status);
     }
@@ -274,7 +232,7 @@ class Subscription extends AggregateRoot {
     if (changes.slotsTotal !== undefined) {
       this._slotsTotal = changes.slotsTotal;
       
-      // Ensure slotsAvailable doesn't exceed slotsTotal
+      // Upewnienie się, że slotsAvailable nie przekracza slotsTotal
       if (this._slotsAvailable > this._slotsTotal) {
         this._slotsAvailable = this._slotsTotal;
       }
@@ -295,9 +253,7 @@ class Subscription extends AggregateRoot {
   }
   
   /**
-   * Change the subscription status
-   * @param {string} status - New status
-   * @returns {void}
+   * Zmiana statusu subskrypcji
    */
   changeStatus(status) {
     this._status = SubscriptionStatus.fromString(status);
@@ -305,26 +261,40 @@ class Subscription extends AggregateRoot {
   }
   
   /**
-   * Set access instructions
-   * @param {string} plainText - Plain text instructions
-   * @param {string} encryptionKeyId - ID of the encryption key
-   * @returns {void}
-   * @throws {ValidationException} If validation fails
+   * Ustawia instrukcje dostępu
    */
   setAccessInstructions(plainText, encryptionKeyId) {
+    if (!plainText || plainText.trim().length < 10) {
+      throw new ValidationException('Invalid access instructions', {
+        accessInstructions: 'Access instructions must be at least 10 characters long'
+      });
+    }
+    
     this._accessInstructions = AccessInstructions.create(plainText, encryptionKeyId);
     this._updatedAt = new Date();
   }
   
   /**
-   * Reserve slots for purchase
-   * @param {number} count - Number of slots to reserve
-   * @param {string} purchaserId - ID of the purchaser
-   * @returns {void}
-   * @throws {BusinessRuleViolationException} If not enough slots are available
+   * Rezerwuje miejsca w subskrypcji
    */
   reserveSlots(count, purchaserId) {
-    // Check if the subscription is active
+    // Sprawdzenie niezmienników biznesowych
+    this.validateReservation(count);
+    
+    // Po walidacji wykonanie operacji
+    this._slotsAvailable -= count;
+    this._updatedAt = new Date();
+    
+    // Emisja zdarzenia
+    this.addDomainEvent(new SlotsPurchasedEvent(this, count, purchaserId));
+  }
+  
+  /**
+   * Waliduje operację rezerwacji miejsc
+   * @private
+   */
+  validateReservation(count) {
+    // Sprawdzenie, czy subskrypcja jest aktywna
     if (!this._status.isActive()) {
       throw new BusinessRuleViolationException(
         'Cannot reserve slots for an inactive subscription',
@@ -332,27 +302,17 @@ class Subscription extends AggregateRoot {
       );
     }
     
-    // Check if enough slots are available
+    // Sprawdzenie, czy jest wystarczająca liczba miejsc
     if (this._slotsAvailable < count) {
       throw new BusinessRuleViolationException(
         'Not enough slots available',
         'insufficient_slots'
       );
     }
-    
-    // Reserve slots
-    this._slotsAvailable -= count;
-    this._updatedAt = new Date();
-    
-    // Add domain event
-    this.addDomainEvent(new SlotsPurchasedEvent(this, count, purchaserId));
   }
   
   /**
-   * Add more slots to the subscription
-   * @param {number} count - Number of slots to add
-   * @returns {void}
-   * @throws {ValidationException} If validation fails
+   * Dodaje więcej miejsc do subskrypcji
    */
   addSlots(count) {
     if (count <= 0) {
@@ -367,18 +327,18 @@ class Subscription extends AggregateRoot {
   }
   
   /**
-   * Check if the subscription can be purchased
-   * @returns {boolean} True if purchasable
+   * Sprawdza, czy subskrypcja może być kupiona
    */
   isPurchasable() {
     return this._status.isActive() && this._slotsAvailable > 0;
   }
   
   /**
-   * Check if the subscription has access instructions
-   * @returns {boolean} True if access instructions are set
+   * Sprawdza, czy subskrypcja ma instrukcje dostępu
    */
   hasAccessInstructions() {
     return this._accessInstructions !== null;
   }
 }
+
+module.exports = Subscription;

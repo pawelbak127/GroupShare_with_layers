@@ -1,78 +1,80 @@
+// src/domain/subscription/SubscriptionRepository.js
+
 const { Repository } = require('../shared/Entity');
 
 /**
- * @interface SubscriptionRepository
- * @extends Repository<Subscription>
+ * Repozytorium subskrypcji
+ * @extends Repository
  */
 class SubscriptionRepository extends Repository {
   /**
-   * Find subscriptions by group ID
-   * @param {string} groupId - Group ID
-   * @returns {Promise<Array<Subscription>>} List of subscriptions
+   * Zapisuje subskrypcję
+   * @param {Subscription} subscription - Subskrypcja do zapisania
+   * @returns {Promise<Subscription>} Zapisana subskrypcja
    */
-  async findByGroupId(groupId) {
+  async save(subscription) {
     throw new Error('Method not implemented');
   }
   
   /**
-   * Find subscriptions by platform ID
-   * @param {string} platformId - Platform ID
-   * @returns {Promise<Array<Subscription>>} List of subscriptions
+   * Znajduje subskrypcję po ID
+   * @param {string} id - ID subskrypcji
+   * @returns {Promise<Subscription|null>} Znaleziona subskrypcja lub null
    */
-  async findByPlatformId(platformId) {
+  async findById(id) {
     throw new Error('Method not implemented');
   }
   
   /**
-   * Find available subscriptions (with free slots)
-   * @returns {Promise<Array<Subscription>>} List of available subscriptions
-   */
-  async findAvailable() {
-    throw new Error('Method not implemented');
-  }
-  
-  /**
-   * Find subscriptions in a price range
-   * @param {number} min - Minimum price
-   * @param {number} max - Maximum price
-   * @returns {Promise<Array<Subscription>>} List of subscriptions
-   */
-  async findByPriceRange(min, max) {
-    throw new Error('Method not implemented');
-  }
-  
-  /**
-   * Find subscriptions by status
-   * @param {string} status - Subscription status
-   * @returns {Promise<Array<Subscription>>} List of subscriptions
-   */
-  async findByStatus(status) {
-    throw new Error('Method not implemented');
-  }
-  
-  /**
-   * Update available slots
-   * @param {string} id - Subscription ID
-   * @param {number} slotsAvailable - New number of available slots
-   * @returns {Promise<void>}
-   */
-  async updateAvailableSlots(id, slotsAvailable) {
-    throw new Error('Method not implemented');
-  }
-  
-  /**
-   * Get available slots
-   * @param {string} id - Subscription ID
-   * @returns {Promise<number>} Number of available slots
+   * Pobiera dostępne sloty dla subskrypcji
+   * @param {string} id - ID subskrypcji
+   * @returns {Promise<number>} Liczba dostępnych slotów
    */
   async getAvailableSlots(id) {
     throw new Error('Method not implemented');
   }
   
   /**
-   * Save access instructions
-   * @param {string} subscriptionId - Subscription ID
-   * @param {Object} accessInstructions - Access instructions data
+   * Aktualizuje dostępne sloty dla subskrypcji
+   * @param {string} id - ID subskrypcji
+   * @param {number} count - Nowa liczba dostępnych slotów
+   * @returns {Promise<void>}
+   */
+  async updateAvailableSlots(id, count) {
+    throw new Error('Method not implemented');
+  }
+  
+  /**
+   * Znajduje subskrypcje według określonych kryteriów
+   * @param {Object} criteria - Kryteria wyszukiwania
+   * @returns {Promise<Array<Subscription>>} Lista subskrypcji
+   */
+  async findByCriteria(criteria) {
+    throw new Error('Method not implemented');
+  }
+  
+  /**
+   * Usuwa subskrypcję
+   * @param {string} id - ID subskrypcji
+   * @returns {Promise<boolean>} Czy usunięto
+   */
+  async delete(id) {
+    throw new Error('Method not implemented');
+  }
+  
+  /**
+   * Sprawdza, czy subskrypcja istnieje
+   * @param {string} id - ID subskrypcji
+   * @returns {Promise<boolean>} Czy istnieje
+   */
+  async exists(id) {
+    throw new Error('Method not implemented');
+  }
+  
+  /**
+   * Zapisuje instrukcje dostępu dla subskrypcji
+   * @param {string} subscriptionId - ID subskrypcji
+   * @param {Object} accessInstructions - Dane instrukcji dostępu
    * @returns {Promise<void>}
    */
   async saveAccessInstructions(subscriptionId, accessInstructions) {
@@ -80,22 +82,13 @@ class SubscriptionRepository extends Repository {
   }
   
   /**
-   * Get access instructions
-   * @param {string} subscriptionId - Subscription ID
-   * @returns {Promise<Object|null>} Access instructions data
+   * Pobiera instrukcje dostępu dla subskrypcji
+   * @param {string} subscriptionId - ID subskrypcji
+   * @returns {Promise<Object|null>} Dane instrukcji dostępu lub null
    */
   async getAccessInstructions(subscriptionId) {
     throw new Error('Method not implemented');
   }
 }
 
-// Export all subscription domain components
-module.exports = {
-  Subscription,
-  SubscriptionPlatform,
-  SubscriptionRepository,
-  SubscriptionCreatedEvent,
-  SlotsPurchasedEvent,
-  SubscriptionStatus,
-  AccessInstructions
-};
+module.exports = SubscriptionRepository;
