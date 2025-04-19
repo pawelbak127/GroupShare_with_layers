@@ -1,10 +1,8 @@
+// src/application/use-cases/access/ConfirmAccessUseCase.js
+
 const BaseUseCase = require('../../BaseUseCase');
-const { 
-  ResourceNotFoundException, 
-  AuthorizationException,
-  BusinessRuleViolationException 
-} = require('../../../exceptions');
-const BaseDTO = require('../../../dtos/BaseDTO');
+const { ResourceNotFoundException } = require('../../exceptions');
+const BaseDTO = require('../../dtos/BaseDTO');
 
 // DTO Żądania
 class ConfirmAccessRequestDTO extends BaseDTO {
@@ -101,16 +99,8 @@ class ConfirmAccessUseCase extends BaseUseCase {
       throw new ResourceNotFoundException('Purchase not found', 'purchase', request.purchaseId);
     }
     
-    // Sprawdź czy dostęp został przyznany
-    if (!purchase.accessProvided) {
-      throw new BusinessRuleViolationException(
-        'Access has not been provided yet',
-        'access_not_provided'
-      );
-    }
-    
-    // Potwierdź dostęp
-    purchase.confirmAccess();
+    // Użyj zachowania domenowego zamiast własnej logiki
+    purchase.confirmAccess(request.isWorking);
     await this.purchaseRepository.save(purchase);
     
     const response = new ConfirmAccessResponseDTO();

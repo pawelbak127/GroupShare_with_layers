@@ -1,5 +1,7 @@
-const IUseCase = require('../interfaces/IUseCase');
-const ValidationException = require('../exceptions/ValidationException');
+// src/application/BaseUseCase.js
+
+const IUseCase = require('./interfaces/IUseCase');
+const ValidationException = require('./exceptions/ValidationException');
 
 /**
  * Bazowa implementacja przypadku użycia
@@ -24,9 +26,44 @@ class BaseUseCase {
 
     // Sprawdzenie autoryzacji
     await this.authorize(request);
+    
+    // Sprawdź czy potrzebna transakcja
+    if (this.requiresTransaction && this.unitOfWorkFactory) {
+      return this.executeWithTransaction(request);
+    }
 
-    // Wykonanie właściwej logiki
+    // Wykonanie właściwej logiki bez transakcji
     return this.executeImpl(request);
+  }
+  
+  /**
+   * Wykonuje przypadek użycia w ramach transakcji
+   * @param {TRequest} request Żądanie
+   * @returns {Promise<TResponse>} Odpowiedź
+   * @private
+   */
+  async executeWithTransaction(request) {
+    const unitOfWork = this.unitOfWorkFactory.create();
+    try {
+      await unitOfWork.begin();
+      
+      // Wykonaj właściwą logikę w kontekście transakcji
+      const result = await this.executeImpl(request, unitOfWork);
+      
+      // Jeśli wykonanie przebiegło pomyślnie, zatwierdź transakcję
+      await unitOfWork.commit();
+      
+      return result;
+    } catch (error) {
+      // W przypadku błędu wycofaj transakcję
+      try {
+        await unitOfWork.rollback();
+      } catch (rollbackError) {
+        console.error('Failed to rollback transaction:', rollbackError);
+      }
+      
+      throw error;
+    }
   }
 
   /**
@@ -52,10 +89,19 @@ class BaseUseCase {
    * Implementacja właściwej logiki przypadku użycia
    * @abstract
    * @param {TRequest} request Żądanie
+   * @param {UnitOfWork} [unitOfWork] Optional Unit of Work
    * @returns {Promise<TResponse>} Odpowiedź
    */
-  async executeImpl(request) {
+  async executeImpl(request, unitOfWork) {
     throw new Error('Method not implemented');
+  }
+  
+  /**
+   * Określa czy przypadek użycia wymaga transakcji
+   * @returns {boolean} True jeśli przypadek wymaga transakcji
+   */
+  get requiresTransaction() {
+    return false;
   }
 }
 

@@ -4,6 +4,7 @@ const { ValidationException, BusinessRuleViolationException } = require('../shar
 const PurchaseStatus = require('./value-objects/PurchaseStatus');
 const PurchaseCreatedEvent = require('./events/PurchaseCreatedEvent');
 const PurchaseCompletedEvent = require('./events/PurchaseCompletedEvent');
+const AccessConfirmedEvent = require('../access/events/AccessConfirmedEvent');
 
 /**
  * Purchase aggregate root
@@ -313,11 +314,30 @@ class Purchase extends AggregateRoot {
   }
   
   /**
+   * Mark access as provided
+   * @returns {void}
+   * @throws {BusinessRuleViolationException} If the purchase is not completed
+   */
+  provideAccess() {
+    if (!this._status.isCompleted()) {
+      throw new BusinessRuleViolationException(
+        'Only completed purchases can have access provided',
+        'invalid_purchase_status'
+      );
+    }
+    
+    this._accessProvided = true;
+    this._accessProvidedAt = new Date();
+    this._updatedAt = new Date();
+  }
+
+  /**
    * Mark access as confirmed
+   * @param {boolean} isWorking - Whether the access is working correctly
    * @returns {void}
    * @throws {BusinessRuleViolationException} If access is not provided
    */
-  confirmAccess() {
+  confirmAccess(isWorking = true) {
     if (!this._accessProvided) {
       throw new BusinessRuleViolationException(
         'Access must be provided before it can be confirmed',
@@ -328,6 +348,31 @@ class Purchase extends AggregateRoot {
     this._accessConfirmed = true;
     this._accessConfirmedAt = new Date();
     this._updatedAt = new Date();
+    
+    // Add domain event for access confirmation
+    this.addDomainEvent(new AccessConfirmedEvent(this._id.toString(), this._userId, isWorking));
+    
+    // If access is not working, change purchase status to problem
+    if (!isWorking) {
+      this._status = PurchaseStatus.PROBLEM;
+    }
+  }
+  
+  /**
+   * Check if purchase has instructions available
+   * @returns {boolean} Whether access instructions are available
+   */
+  hasAccessInstructions() {
+    return this._accessProvided && this._status.isCompleted();
+  }
+  
+  /**
+   * Can user view access instructions
+   * @param {string} userId - User ID requesting access
+   * @returns {boolean} Whether user can view instructions
+   */
+  canUserViewInstructions(userId) {
+    return this._userId === userId && this._accessProvided && this._status.isCompleted();
   }
   
   /**
@@ -354,3 +399,5 @@ class Purchase extends AggregateRoot {
     return this._transaction !== null && this._transaction.status.isCompleted();
   }
 }
+
+module.exports = Purchase;

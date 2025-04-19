@@ -342,6 +342,54 @@ class Group extends AggregateRoot {
   }
   
   /**
+   * Activate a member
+   * @param {string} userId - User ID
+   * @returns {void}
+   * @throws {BusinessRuleViolationException} If the user is not a member
+   */
+  activateMember(userId) {
+    // Check if the user is a member
+    if (!this._members.has(userId)) {
+      throw new BusinessRuleViolationException(
+        'User is not a member of this group',
+        'member_not_found'
+      );
+    }
+    
+    const member = this._members.get(userId);
+    member.activate();
+    this._updatedAt = new Date();
+  }
+  
+  /**
+   * Deactivate a member
+   * @param {string} userId - User ID
+   * @returns {void}
+   * @throws {BusinessRuleViolationException} If the user is not a member or is the owner
+   */
+  deactivateMember(userId) {
+    // Cannot deactivate the owner
+    if (userId === this._ownerId) {
+      throw new BusinessRuleViolationException(
+        'Cannot deactivate the owner of the group',
+        'owner_deactivation'
+      );
+    }
+    
+    // Check if the user is a member
+    if (!this._members.has(userId)) {
+      throw new BusinessRuleViolationException(
+        'User is not a member of this group',
+        'member_not_found'
+      );
+    }
+    
+    const member = this._members.get(userId);
+    member.deactivate();
+    this._updatedAt = new Date();
+  }
+  
+  /**
    * Get a member by user ID
    * @param {string} userId - User ID
    * @returns {GroupMember|null} The member or null if not found
@@ -404,3 +452,5 @@ class Group extends AggregateRoot {
     this._updatedAt = new Date();
   }
 }
+
+module.exports = Group;

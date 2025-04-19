@@ -1,10 +1,8 @@
+// src/application/use-cases/access/ProvideAccessInstructionsUseCase.js
+
 const BaseUseCase = require('../../BaseUseCase');
-const { 
-  AuthorizationException, 
-  ResourceNotFoundException,
-  BusinessRuleViolationException
-} = require('../../../exceptions');
-const BaseDTO = require('../../../dtos/BaseDTO');
+const { AuthorizationException, ResourceNotFoundException } = require('../../exceptions');
+const BaseDTO = require('../../dtos/BaseDTO');
 
 // DTO Żądania
 class ProvideAccessInstructionsRequestDTO extends BaseDTO {
@@ -103,22 +101,6 @@ class ProvideAccessInstructionsUseCase extends BaseUseCase {
       throw new ResourceNotFoundException('Purchase not found', 'purchase', request.purchaseId);
     }
     
-    // Sprawdź status zakupu
-    if (purchase.status.toString() !== 'completed') {
-      throw new BusinessRuleViolationException(
-        'Purchase is not completed',
-        'purchase_not_completed'
-      );
-    }
-    
-    // Sprawdź czy dostęp został przyznany
-    if (!purchase.accessProvided) {
-      throw new BusinessRuleViolationException(
-        'Access has not been provided for this purchase',
-        'access_not_provided'
-      );
-    }
-    
     let tokenVerified = false;
     
     // Jeśli podano token, zweryfikuj go
@@ -146,6 +128,22 @@ class ProvideAccessInstructionsUseCase extends BaseUseCase {
       }
     }
     
+    // Sprawdź domenową logikę czy instrukcje mogą być pokazane
+    if (!(tokenVerified || purchase.canUserViewInstructions(request.userId))) {
+      throw new AuthorizationException(
+        'Access to instructions not permitted',
+        'instructions_access_denied'
+      );
+    }
+    
+    // Sprawdź czy zakup ma dostępne instrukcje
+    if (!purchase.hasAccessInstructions()) {
+      throw new BusinessRuleViolationException(
+        'Access instructions are not available for this purchase',
+        'no_instructions_available'
+      );
+    }
+    
     // Pobierz subskrypcję i jej szczegóły
     const subscription = await this.subscriptionRepository.findById(purchase.subscriptionId);
     const platform = await this.platformRepository.findById(subscription.platformId);
@@ -167,12 +165,6 @@ class ProvideAccessInstructionsUseCase extends BaseUseCase {
       // Jeśli nie znaleziono instrukcji, zwróć domyślną wiadomość
       instructionsText = 'Instrukcje dostępu nie zostały jeszcze skonfigurowane przez sprzedawcę. ' +
         'Prosimy o kontakt ze sprzedawcą, aby uzyskać dane dostępowe.';
-    }
-    
-    // Oznacz zakup jako potwierdzony, jeśli jeszcze nie jest
-    if (!purchase.accessConfirmed) {
-      purchase.confirmAccess();
-      await this.purchaseRepository.save(purchase);
     }
     
     // Przygotuj odpowiedź
